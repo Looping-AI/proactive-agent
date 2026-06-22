@@ -1,0 +1,112 @@
+# Looping AI Remote A2A Agent Template
+
+A complete, deployable **reference custom agent** for
+[looping-gateway](https://github.com/Looping-AI/looping-gateway). It shows
+exactly what a third party must implement to be safely registered and routed to
+by the gateway — using **zero shared secrets**. All trust flows through
+asymmetric Ed25519 signatures over public JWKS.
+
+## Getting Started
+
+### 1. Install dependencies
+
+```sh
+npm install
+```
+
+### 2. Generate the local A2A signing key
+
+```sh
+cp .dev.vars.example .dev.vars
+npm run keygen example-1
+```
+
+Copy the printed private JWK into `.dev.vars` as `A2A_SIGNING_KEY`.
+
+### 3. Configure the gateway origin
+
+In `wrangler.jsonc`, point `GATEWAY_ORIGINS` at your deployed gateway:
+
+```jsonc
+"GATEWAY_ORIGINS": "[\"https://<your-gateway>\"]"
+```
+
+This must match the gateway's own `GATEWAY_ORIGIN`. Add multiple entries for multi-worker setups or domain transitions.
+
+### 4. Run locally
+
+```sh
+npm run dev
+```
+
+The gateway is deployed to production, so it needs a publicly reachable URL to call back into your local machine. You need a tunnel.
+
+**Option A — Built-in tunnel (quickest)**
+
+Once the dev server is running, press **`t`** in the terminal. Wrangler starts a temporary `trycloudflare.com` URL and prints it:
+
+```
+⬣ Sharing via Cloudflare Tunnel: https://video-spots-novels-supplemental.trycloudflare.com/
+```
+
+Use that URL when registering the agent on the gateway (step 6). The limitation is that the URL is random and changes every tunnel session — you'll need to re-register the agent each time.
+
+**Option B — Named tunnel with a fixed URL (long-term development)**
+
+Requires a domain managed by Cloudflare (free tier works). One-time setup:
+
+```sh
+npx wrangler tunnel create remote-agent-dev
+npx wrangler tunnel route dns remote-agent-dev <your-subdomain.yourdomain.com>
+```
+
+Then start your dev server with the tunnel in one command:
+
+```sh
+npx wrangler dev --tunnel --tunnel-name remote-agent-dev
+```
+
+Register the agent once at `https://<your-subdomain.yourdomain.com>` and the URL stays valid across restarts.
+
+### 5. Deploy to production
+
+Upload the signing key as a Wrangler secret, then deploy:
+
+```sh
+npm run keygen agent-1                 # generate new key for production
+wrangler secret put A2A_SIGNING_KEY    # paste the new private JWK
+npx wrangler deploy
+```
+
+You can observe it (stats and logs) on your cloudflare dashboard.
+
+## Register it on the gateway
+
+In a workspace admin channel, ask the admin agent to register this agent with
+its **HTTPS** endpoint (the deployed worker origin). Registration fails unless:
+
+- the endpoint is HTTPS and passes the gateway's SSRF policy,
+- the AgentCard is reachable and **validly signed**,
+- the signing key resolves from the card's `jku`.
+
+Attach it to channels, then mention it with its `::name` reference.
+
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full trust model, sequence diagrams, canonical JSON spec, environment variables, and file map.
+
+## Feedback
+
+Found a bug or have a question? [Open an issue](https://github.com/Looping-AI/remote-agent/issues) — bug reports, questions, and improvement ideas are all welcome.
+
+## Contributing
+
+1. Fork the repo and create a feature branch.
+2. Make your changes — keep the scope focused.
+3. Open a pull request with a clear description of what and why.
+
+Please check [ARCHITECTURE.md](ARCHITECTURE.md) before contributing.
+
+## License
+
+[GPL-3.0](LICENSE)

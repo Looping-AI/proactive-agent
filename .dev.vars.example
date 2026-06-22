@@ -1,0 +1,7 @@
+// Copy to `.dev.vars` for local `wrangler dev`. In production set the secret
+// with `wrangler secret put A2A_SIGNING_KEY`.
+//
+// A2A_SIGNING_KEY: an Ed25519 private JWK (one line) that signs this agent's
+// AgentCard. MUST include a `kid`. Generate with `npm run keygen`.
+// Only the matching PUBLIC key is ever exposed, at /.well-known/jwks.json.
+A2A_SIGNING_KEY=
