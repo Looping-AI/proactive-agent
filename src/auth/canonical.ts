@@ -2,7 +2,7 @@
  * Canonical JSON for AgentCard signing.
  *
  * This MUST byte-for-byte match the gateway's verifier
- * (`src/a2a/card-verify.ts` → `canonicalCardPayload` + `base64UrlOfString`).
+ * (`src/a2a/card-verify.ts` → `canonicalCardPayload`).
  * Contract:
  *  - object keys sorted recursively (ascending, `Object.keys().sort()`),
  *  - `JSON.stringify` with no insignificant whitespace,
@@ -14,7 +14,7 @@
  */
 
 /** Recursively sort object keys so serialization is deterministic. */
-export function sortKeys(value: unknown): unknown {
+function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") {
     const src = value as Record<string, unknown>;
@@ -30,12 +30,4 @@ export function canonicalCardPayload(card: Record<string, unknown>): string {
   const { signatures: _signatures, ...rest } = card;
   void _signatures;
   return JSON.stringify(sortKeys(rest));
-}
-
-/** base64url(no padding) of a UTF-8 string. */
-export function base64UrlOfString(s: string): string {
-  const bytes = new TextEncoder().encode(s);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

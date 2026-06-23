@@ -24,9 +24,9 @@ import { EchoExecutor } from "./agent/executor";
  * Demonstrates the full zero-trust, no-shared-secrets contract a third-party
  * custom agent must implement:
  *
- *  1. Serve a **signed** AgentCard at `…/.well-known/agent-card.json` so the
+ *  1. Publish the card-signing **public** JWKS at the card's `jku`.
+ *  2. Serve a **signed** AgentCard at `…/.well-known/agent-card.json` so the
  *     gateway can verify+pin the agent's identity at registration ("G knows R").
- *  2. Publish the card-signing **public** JWKS at the card's `jku`.
  *  3. **Verify the gateway's identity JWT** on every JSON-RPC call against the
  *     gateway's public JWKS ("R knows G"), then echo the caller's message.
  *
@@ -57,14 +57,14 @@ export default {
     const origin = url.origin;
     const privateJwk = parsePrivateJwk(env.A2A_SIGNING_KEY);
 
-    // (2) Card-signing public JWKS — resolves the card's `jku` for the gateway.
+    // (1) Card-signing public JWKS — resolves the card's `jku` for the gateway.
     if (request.method === "GET" && url.pathname === JWKS_PATH) {
       return Response.json(publicCardJwks(privateJwk), {
         headers: { "cache-control": "public, max-age=3600" }
       });
     }
 
-    // (1) Signed AgentCard discovery.
+    // (2) Signed AgentCard discovery.
     if (request.method === "GET" && url.pathname.endsWith(AGENT_CARD_PATH)) {
       const card = await signCard(buildBaseCard(origin), {
         privateJwk,
