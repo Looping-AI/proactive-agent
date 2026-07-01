@@ -25,12 +25,23 @@ const ALG = "EdDSA";
 /** Namespaced claim the gateway uses for the minimal caller identity. */
 export const IDENTITY_CLAIM = "https://looping.ai/identity";
 
-/** The minimal, scoped caller identity the gateway forwards. */
+/**
+ * The gateway-agent instance identity forwarded by the gateway — i.e. which
+ * registered custom-agent instance dispatched this call, not the Slack end
+ * user. Mirrors `RemoteIdentity` in looping-gateway's `src/auth/agent-jwt.ts`.
+ * The Slack user (if any) travels unverified, inline in the `<turn>` tag in
+ * the message text — the gateway deliberately excludes it from this signed
+ * claim so a remote agent can't read the full caller auth context.
+ */
 export interface GatewayIdentity {
-  slackUserId?: string;
-  displayName?: string | null;
+  /** Canonical instance key, e.g. `custom:7:analytics`. */
+  key?: string;
+  /** Registry name of the logical agent instance. */
+  name?: string;
+  /** Dispatch kind of the caller (today always `"custom"` for remote agents). */
+  kind?: string;
+  /** Workspace the calling agent instance belongs to. */
   workspaceId?: number | null;
-  agentKind?: string;
 }
 
 /** Thrown when a gateway token is missing or fails verification. */

@@ -10,16 +10,23 @@ import type { GatewayIdentity } from "../auth/verify";
  */
 
 export interface WhoamiResult {
-  displayName: string | null;
-  slackUserId: string | null;
+  key: string | null;
+  name: string | null;
+  kind: string | null;
   workspaceId: number | null;
 }
 
-/** Report the verified caller identity carried by the gateway JWT. */
+/**
+ * Report the verified identity of the calling gateway-agent instance carried
+ * by the gateway JWT — not the Slack end user, which the gateway never
+ * attests to remote agents. For the human speaker on a given turn, read the
+ * `<turn from="…" id="…">` tag in the message text instead.
+ */
 export function whoami(identity: GatewayIdentity): WhoamiResult {
   return {
-    displayName: identity.displayName ?? null,
-    slackUserId: identity.slackUserId ?? null,
+    key: identity.key ?? null,
+    name: identity.name ?? null,
+    kind: identity.kind ?? null,
     workspaceId: identity.workspaceId ?? null
   };
 }
@@ -37,7 +44,7 @@ export function buildTools(identity: GatewayIdentity): ToolSet {
   return {
     whoami: tool({
       description:
-        "Return the verified identity of the Slack user you are currently talking to (as attested by the gateway). Takes no input.",
+        "Return the verified identity of the calling gateway-agent instance (as attested by the gateway JWT). This is not the Slack end user's identity — read the `<turn>` tag in the message text for that. Takes no input.",
       inputSchema: z.object({}),
       execute: async () => whoami(identity)
     }),

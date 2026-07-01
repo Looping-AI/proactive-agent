@@ -48,7 +48,10 @@ export async function makeGatewayToken(
   const privateKey = await importJWK(TEST_GATEWAY_PRIVATE_JWK, "EdDSA");
   return new SignJWT({
     "https://looping.ai/identity": options.identity ?? {
-      displayName: "Test User"
+      key: "custom:1:test-agent",
+      name: "Test Agent",
+      kind: "custom",
+      workspaceId: 1
     }
   })
     .setProtectedHeader({

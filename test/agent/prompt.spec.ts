@@ -8,15 +8,15 @@ describe("SOUL", () => {
 });
 
 describe("callerContext", () => {
-  it("names displayName with slackUserId when both are present", () => {
-    expect(callerContext({ displayName: "Ada", slackUserId: "U1" })).toContain(
-      "Current caller: Ada (U1)."
+  it("names the agent instance with its kind when both are present", () => {
+    expect(callerContext({ name: "Demo Agent", kind: "custom" })).toContain(
+      "Calling agent instance: Demo Agent (custom)."
     );
   });
 
-  it("uses slackUserId alone when displayName is absent", () => {
-    expect(callerContext({ slackUserId: "U9" })).toContain(
-      "Current caller: U9."
+  it("falls back to the instance key when name is absent", () => {
+    expect(callerContext({ key: "custom:0:demo" })).toContain(
+      "Calling agent instance: custom:0:demo."
     );
   });
 
@@ -25,7 +25,7 @@ describe("callerContext", () => {
   });
 
   it("includes the workspace when present", () => {
-    expect(callerContext({ displayName: "Ada", workspaceId: 7 })).toContain(
+    expect(callerContext({ name: "Demo Agent", workspaceId: 7 })).toContain(
       "Slack workspace: 7."
     );
   });
@@ -33,8 +33,8 @@ describe("callerContext", () => {
 
 describe("systemPrompt", () => {
   it("starts with the soul then appends the caller context", () => {
-    const p = systemPrompt({ displayName: "Ada" });
+    const p = systemPrompt({ name: "Demo Agent" });
     expect(p.startsWith(SOUL[0])).toBe(true);
-    expect(p).toContain("Current caller: Ada.");
+    expect(p).toContain("Calling agent instance: Demo Agent.");
   });
 });

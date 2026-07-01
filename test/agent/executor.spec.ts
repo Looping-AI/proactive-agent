@@ -59,7 +59,7 @@ function run(
 describe("LlmExecutor — happy path", () => {
   it("publishes the model's reply as a single agent message with the contextId", async () => {
     const { published } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       { model: mockModel({ text: "Hi Ada!" }) },
       makeCtx("hello", "ctx-42")
     );
@@ -71,7 +71,7 @@ describe("LlmExecutor — happy path", () => {
 
   it("always calls bus.finished()", async () => {
     const { done } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       { model: mockModel({ text: "ok" }) }
     );
     expect(done).toBe(true);
@@ -79,7 +79,7 @@ describe("LlmExecutor — happy path", () => {
 
   it("runs a tool call then returns the follow-up text", async () => {
     const { published } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       {
         model: mockModel(
           { toolCall: { toolName: "echo", input: { text: "ping" } } },
@@ -94,7 +94,7 @@ describe("LlmExecutor — happy path", () => {
 describe("LlmExecutor — resilience", () => {
   it("falls back to the secondary model when the primary throws", async () => {
     const { published } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       {
         model: throwingModel("primary boom"),
         fallbackModel: mockModel({ text: "from fallback" })
@@ -105,7 +105,7 @@ describe("LlmExecutor — resilience", () => {
 
   it("replies with the transient message when both models are over capacity", async () => {
     const { published } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       {
         model: throwingModel("capacity temporarily exceeded"),
         fallbackModel: throwingModel("capacity temporarily exceeded")
@@ -116,7 +116,7 @@ describe("LlmExecutor — resilience", () => {
 
   it("replies with the transient message when the model returns empty text", async () => {
     const { published } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       { model: mockModel({ text: "" }) }
     );
     expect(published[0].parts[0]).toMatchObject({ text: TRANSIENT_REPLY });
@@ -124,7 +124,7 @@ describe("LlmExecutor — resilience", () => {
 
   it("replies with a generic error on an unexpected (non-transient) failure", async () => {
     const { published } = await run(
-      { displayName: "Ada" },
+      { name: "Ada" },
       {
         model: throwingModel("kaboom"),
         fallbackModel: throwingModel("kaboom")

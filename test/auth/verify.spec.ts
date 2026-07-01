@@ -170,13 +170,19 @@ describe("verifyGatewayToken — error paths", () => {
 
 describe("verifyGatewayToken — happy path", () => {
   it("returns payload and identity for a valid token", async () => {
-    const identity = { displayName: "Alice", slackUserId: "U123" };
+    const identity = {
+      key: "custom:7:analytics",
+      name: "analytics",
+      kind: "custom",
+      workspaceId: 7
+    };
     const token = await makeGatewayToken({ identity });
 
     const result = await verifyGatewayToken(token, OPTS);
 
-    expect(result.identity.displayName).toBe("Alice");
-    expect(result.identity.slackUserId).toBe("U123");
+    expect(result.identity.key).toBe("custom:7:analytics");
+    expect(result.identity.name).toBe("analytics");
+    expect(result.identity.workspaceId).toBe(7);
     expect(result.payload[IDENTITY_CLAIM]).toEqual(identity);
   });
 });

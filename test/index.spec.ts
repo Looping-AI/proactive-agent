@@ -105,7 +105,7 @@ describe("POST /a2a", () => {
   it("returns a well-formed A2A agent message for an authenticated RPC", async () => {
     const token = await makeGatewayToken({
       audience: AGENT_ORIGIN,
-      identity: { displayName: "Ada" }
+      identity: { name: "Ada", kind: "custom", workspaceId: 1 }
     });
     const rpcBody = {
       jsonrpc: "2.0",

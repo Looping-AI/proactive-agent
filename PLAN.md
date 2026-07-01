@@ -34,11 +34,16 @@ needs standalone (it has no `@/db`, no gateway internals).
 
 The admin agent runs _inside_ the gateway and gets its caller from dispatch
 metadata (`metadata.user`, `adminWorkspaceId`). This agent is **remote**: the
-caller identity comes from the **verified gateway JWT** (`GatewayIdentity`:
-`displayName`, `slackUserId`, roles) in [`src/auth/verify.ts`](src/auth/verify.ts).
-The `<turn from=… id=… channel=… at=…>` provenance wrapper is authored by the
-gateway and arrives **inside the message text** — this agent _parses_ turns
-(for attribution + recall metadata) but never renders them.
+gateway JWT only attests the **calling gateway-agent instance**
+(`GatewayIdentity`: `key`, `name`, `kind`, `workspaceId` — see
+[`src/auth/verify.ts`](src/auth/verify.ts)), never the Slack end user or their
+roles — the gateway's `agent-jwt.ts` deliberately excludes `slackUserId`/
+`displayName` from this claim so a remote agent can't read the full caller
+auth context. The `<turn from=… id=… channel=… at=…>` provenance wrapper is
+authored by the gateway and arrives **inside the message text** — this is the
+only channel carrying the Slack speaker's identity, and it is unverified. This
+agent _parses_ turns (for attribution + recall metadata) but never renders
+them.
 
 ---
 
