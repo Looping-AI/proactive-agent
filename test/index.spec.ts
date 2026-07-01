@@ -9,7 +9,10 @@ import {
 
 const TEST_ENV = {
   A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
-  GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN])
+  GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN]),
+  // No Workers AI in tests: the tool loop takes its graceful error path, and the
+  // real LLM reply is covered by the executor spec's injected mock model.
+  AI: undefined as unknown as Ai
 };
 
 // The worker's fetch handler only takes (request, env) — it never uses ctx.
@@ -99,7 +102,7 @@ describe("POST /a2a", () => {
     expect(res.status).toBe(401);
   });
 
-  it("echoes the caller's message, greeting them by the verified identity", async () => {
+  it("returns a well-formed A2A agent message for an authenticated RPC", async () => {
     const token = await makeGatewayToken({
       audience: AGENT_ORIGIN,
       identity: { displayName: "Ada" }
@@ -126,13 +129,15 @@ describe("POST /a2a", () => {
     });
     expect(res.status).toBe(200);
     const body = await res.json<{
-      result: { parts: { kind: string; text: string }[] };
+      result: { role: string; parts: { kind: string; text: string }[] };
     }>();
-    // The greeting name comes from the verified JWT identity claim, proving the
-    // token was verified and the identity threaded through to the executor.
-    expect(body.result.parts[0].text).toBe(
-      "Hello Ada, you said: Hello from test!"
-    );
+    // There's no AI binding in the test env, so the tool loop takes its graceful
+    // error path — but the JWT was accepted and the turn still produced a
+    // well-formed agent message. Real LLM replies are covered in the executor
+    // spec (with an injected mock model).
+    expect(body.result.role).toBe("agent");
+    expect(body.result.parts[0].kind).toBe("text");
+    expect(body.result.parts[0].text.length).toBeGreaterThan(0);
   });
 });
 

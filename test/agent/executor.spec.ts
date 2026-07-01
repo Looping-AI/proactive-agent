@@ -1,14 +1,24 @@
 import { describe, it, expect } from "vitest";
 import type { Message } from "@a2a-js/sdk";
 import type { ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
-import { EchoExecutor } from "@/agent/executor";
+import { LlmExecutor } from "@/agent/executor";
+import { TRANSIENT_REPLY } from "@/agent/loop";
+import type { Env } from "@/env";
+import type { GatewayIdentity } from "@/auth/verify";
+import { mockModel, throwingModel } from "./mock-model";
 
-function makeCtx(
-  parts: Array<{ kind: string; [k: string]: unknown }>,
-  contextId = "ctx-1"
-): RequestContext {
+// The model is always injected via overrides, so `env.AI` is never touched.
+const ENV = {} as Env;
+
+function makeCtx(text: string, contextId = "ctx-1"): RequestContext {
   return {
-    userMessage: { parts, contextId } as unknown as Message,
+    userMessage: {
+      kind: "message",
+      messageId: "m1",
+      role: "user",
+      parts: [{ kind: "text", text }],
+      contextId
+    },
     contextId
   } as unknown as RequestContext;
 }
@@ -17,8 +27,8 @@ function makeBus() {
   const published: Message[] = [];
   let done = false;
   const bus = {
-    publish: (msg: Message) => {
-      published.push(msg);
+    publish: (m: Message) => {
+      published.push(m);
     },
     finished: () => {
       done = true;
@@ -35,117 +45,101 @@ function makeBus() {
   };
 }
 
-describe("EchoExecutor — identity resolution", () => {
-  it("greets by displayName when present", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ displayName: "Alice" }).execute(
-      makeCtx([{ kind: "text", text: "hi" }]),
-      bus
-    );
-    expect(published[0].parts[0]).toMatchObject({
-      text: "Hello Alice, you said: hi"
-    });
-  });
+function run(
+  identity: GatewayIdentity,
+  overrides: ConstructorParameters<typeof LlmExecutor>[2],
+  ctx = makeCtx("hello")
+) {
+  const tracker = makeBus();
+  return new LlmExecutor(identity, ENV, overrides)
+    .execute(ctx, tracker.bus)
+    .then(() => tracker);
+}
 
-  it("falls back to slackUserId when displayName is absent", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ slackUserId: "U9999" }).execute(
-      makeCtx([{ kind: "text", text: "hey" }]),
-      bus
-    );
-    expect(published[0].parts[0]).toMatchObject({
-      text: "Hello U9999, you said: hey"
-    });
-  });
-
-  it("falls back to 'unknown caller' when both are absent", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({}).execute(
-      makeCtx([{ kind: "text", text: "hello" }]),
-      bus
-    );
-    expect(published[0].parts[0]).toMatchObject({
-      text: "Hello unknown caller, you said: hello"
-    });
-  });
-});
-
-describe("EchoExecutor — message handling", () => {
-  it("concatenates multiple text parts", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ displayName: "Bob" }).execute(
-      makeCtx([
-        { kind: "text", text: "foo" },
-        { kind: "text", text: "bar" }
-      ]),
-      bus
-    );
-    expect(published[0].parts[0]).toMatchObject({
-      text: "Hello Bob, you said: foobar"
-    });
-  });
-
-  it("ignores non-text parts", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ displayName: "Carol" }).execute(
-      makeCtx([
-        { kind: "file", url: "https://example.com/file.pdf" },
-        { kind: "text", text: "check this" }
-      ]),
-      bus
-    );
-    expect(published[0].parts[0]).toMatchObject({
-      text: "Hello Carol, you said: check this"
-    });
-  });
-
-  it("echoes an empty message without error", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ displayName: "Dan" }).execute(makeCtx([]), bus);
-    expect(published[0].parts[0]).toMatchObject({
-      text: "Hello Dan, you said: "
-    });
-  });
-});
-
-describe("EchoExecutor — bus contract", () => {
-  it("publishes exactly one reply", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ displayName: "Eve" }).execute(
-      makeCtx([{ kind: "text", text: "test" }]),
-      bus
+describe("LlmExecutor — happy path", () => {
+  it("publishes the model's reply as a single agent message with the contextId", async () => {
+    const { published } = await run(
+      { displayName: "Ada" },
+      { model: mockModel({ text: "Hi Ada!" }) },
+      makeCtx("hello", "ctx-42")
     );
     expect(published).toHaveLength(1);
-  });
-
-  it("calls bus.finished() after publishing", async () => {
-    const tracker = makeBus();
-    await new EchoExecutor({ displayName: "Eve" }).execute(
-      makeCtx([{ kind: "text", text: "test" }]),
-      tracker.bus
-    );
-    expect(tracker.done).toBe(true);
-  });
-
-  it("reply carries the contextId from the request", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({ displayName: "Frank" }).execute(
-      makeCtx([{ kind: "text", text: "ctx check" }], "my-context-42"),
-      bus
-    );
-    expect(published[0].contextId).toBe("my-context-42");
-  });
-
-  it("reply has role 'agent'", async () => {
-    const { bus, published } = makeBus();
-    await new EchoExecutor({}).execute(
-      makeCtx([{ kind: "text", text: "x" }]),
-      bus
-    );
     expect(published[0].role).toBe("agent");
+    expect(published[0].contextId).toBe("ctx-42");
+    expect(published[0].parts[0]).toMatchObject({ text: "Hi Ada!" });
   });
 
+  it("always calls bus.finished()", async () => {
+    const { done } = await run(
+      { displayName: "Ada" },
+      { model: mockModel({ text: "ok" }) }
+    );
+    expect(done).toBe(true);
+  });
+
+  it("runs a tool call then returns the follow-up text", async () => {
+    const { published } = await run(
+      { displayName: "Ada" },
+      {
+        model: mockModel(
+          { toolCall: { toolName: "echo", input: { text: "ping" } } },
+          { text: "I echoed: ping" }
+        )
+      }
+    );
+    expect(published[0].parts[0]).toMatchObject({ text: "I echoed: ping" });
+  });
+});
+
+describe("LlmExecutor — resilience", () => {
+  it("falls back to the secondary model when the primary throws", async () => {
+    const { published } = await run(
+      { displayName: "Ada" },
+      {
+        model: throwingModel("primary boom"),
+        fallbackModel: mockModel({ text: "from fallback" })
+      }
+    );
+    expect(published[0].parts[0]).toMatchObject({ text: "from fallback" });
+  });
+
+  it("replies with the transient message when both models are over capacity", async () => {
+    const { published } = await run(
+      { displayName: "Ada" },
+      {
+        model: throwingModel("capacity temporarily exceeded"),
+        fallbackModel: throwingModel("capacity temporarily exceeded")
+      }
+    );
+    expect(published[0].parts[0]).toMatchObject({ text: TRANSIENT_REPLY });
+  });
+
+  it("replies with the transient message when the model returns empty text", async () => {
+    const { published } = await run(
+      { displayName: "Ada" },
+      { model: mockModel({ text: "" }) }
+    );
+    expect(published[0].parts[0]).toMatchObject({ text: TRANSIENT_REPLY });
+  });
+
+  it("replies with a generic error on an unexpected (non-transient) failure", async () => {
+    const { published } = await run(
+      { displayName: "Ada" },
+      {
+        model: throwingModel("kaboom"),
+        fallbackModel: throwingModel("kaboom")
+      }
+    );
+    const text = (published[0].parts[0] as { text: string }).text;
+    expect(text).not.toBe(TRANSIENT_REPLY);
+    expect(text).toMatch(/unexpected error/i);
+  });
+});
+
+describe("LlmExecutor — bus contract", () => {
   it("cancelTask resolves without error", async () => {
-    await expect(new EchoExecutor({}).cancelTask()).resolves.toBeUndefined();
+    await expect(
+      new LlmExecutor({}, ENV).cancelTask()
+    ).resolves.toBeUndefined();
   });
 });

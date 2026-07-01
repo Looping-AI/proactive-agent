@@ -1,44 +1,45 @@
-import type { Message, Part } from "@a2a-js/sdk";
 import type {
   AgentExecutor,
   ExecutionEventBus,
   RequestContext
 } from "@a2a-js/sdk/server";
 import type { GatewayIdentity } from "../auth/verify";
+import type { Env } from "../env";
+import { createModelPair, type ModelOverrides, type ModelPair } from "./model";
+import { systemPrompt } from "./prompt";
+import { buildTools } from "./tools";
+import { executeAgentTurn } from "./loop";
 
-/** Concatenate the text parts of an inbound A2A message. */
-function textOf(message: Message): string {
-  return (message.parts ?? [])
-    .filter(
-      (p: Part): p is Extract<Part, { kind: "text" }> => p.kind === "text"
-    )
-    .map((p) => p.text)
-    .join("")
-    .trim();
-}
+const UNEXPECTED_REPLY =
+  "Sorry, I hit an unexpected error handling that request. Please try again, " +
+  "and check the agent's logs if it keeps happening.";
 
-/** Echo executor that greets the verified caller by name (from the JWT claims). */
-export class EchoExecutor implements AgentExecutor {
-  constructor(private readonly identity: GatewayIdentity) {}
+/**
+ * A2A executor that answers each turn with a stateless Workers-AI tool loop,
+ * greeting/serving the caller verified from the gateway JWT. Replaces the old
+ * echo executor; state/memory arrive in a later phase.
+ */
+export class LlmExecutor implements AgentExecutor {
+  private readonly models: ModelPair;
+
+  constructor(
+    private readonly identity: GatewayIdentity,
+    env: Env,
+    overrides: ModelOverrides = {}
+  ) {
+    this.models = createModelPair(env, overrides);
+  }
 
   execute = async (
     ctx: RequestContext,
     bus: ExecutionEventBus
   ): Promise<void> => {
-    const said = textOf(ctx.userMessage);
-    const who =
-      this.identity.displayName ||
-      this.identity.slackUserId ||
-      "unknown caller";
-    const reply: Message = {
-      kind: "message",
-      messageId: crypto.randomUUID(),
-      role: "agent",
-      parts: [{ kind: "text", text: `Hello ${who}, you said: ${said}` }],
-      contextId: ctx.contextId
-    };
-    bus.publish(reply);
-    bus.finished();
+    await executeAgentTurn(ctx, bus, {
+      models: this.models,
+      system: systemPrompt(this.identity),
+      tools: buildTools(this.identity),
+      unexpectedReply: UNEXPECTED_REPLY
+    });
   };
 
   cancelTask = async (): Promise<void> => {};

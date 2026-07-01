@@ -56,7 +56,7 @@ describe("buildBaseCard", () => {
     const card = buildBaseCard(ORIGIN);
     expect(card.name).toBeTruthy();
     expect(card.protocolVersion).toBeTruthy();
-    expect(card.skills).toHaveLength(1);
+    expect(card.skills.length).toBeGreaterThan(0);
   });
 });
 

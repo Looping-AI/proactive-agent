@@ -6,7 +6,7 @@ Guidance for coding agents working in this repo. Keep it accurate — update it 
 
 A deployable **reference remote (custom) A2A agent** for [looping-gateway](https://github.com/Looping-AI/looping-gateway), running as a single **Cloudflare Worker**. It demonstrates the zero-shared-secrets trust contract a third party must implement to be registered and routed to by the gateway. All trust flows through asymmetric **Ed25519 / EdDSA** signatures over public JWKS — there are no symmetric secrets in either direction.
 
-The agent itself is a trivial echo: it verifies the caller and replies `Hello <name>, you said: <text>`. The value is the _contract_, not the behavior.
+Once the caller is verified, the agent answers with a **stateless Workers-AI tool loop** (primary + fallback model via AI Gateway) — see the "Agent runtime" section of [ARCHITECTURE.md](ARCHITECTURE.md). It ships with placeholder `whoami` / `echo` tools; real domain tools, memory, and recall are later phases (see [PLAN.md](PLAN.md)). The enduring value is the zero-trust _contract_, which is independent of the agent's behavior.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full trust model and sequence diagrams, and [README.md](README.md) for setup/deploy/registration.
 
@@ -15,7 +15,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for the full trust model and sequence di
 ```sh
 npm install            # install deps
 npm run dev            # wrangler dev (local Worker); press `t` for a quick tunnel
-npm run test           # vitest run (vitest-pool-workers, hermetic — no network)
+npm run test           # vitest run (node project for the agent runtime + workers project for the entrypoint; hermetic — no network)
 npm run test:watch     # vitest watch
 npm run check          # prettier --check && eslint && tsc (src) && tsc (test)  ← CI + pre-commit gate
 npm run lint           # eslint only
@@ -31,14 +31,21 @@ npm run keygen <kid>   # generate an Ed25519 private JWK for A2A_SIGNING_KEY
 | Path                                                   | Role                                                                                           |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | [src/index.ts](src/index.ts)                           | Worker entry. Routes JWKS / AgentCard / JSON-RPC; verifies the gateway JWT.                    |
-| [src/agent/executor.ts](src/agent/executor.ts)         | `EchoExecutor` — handles A2A task execution and builds the reply.                              |
-| [src/agent/manifest.ts](src/agent/manifest.ts)         | AgentCard manifest definition.                                                                 |
+| [src/env.ts](src/env.ts)                               | `Env` interface (bindings + vars): `A2A_SIGNING_KEY`, `GATEWAY_ORIGINS`, `AI`.                 |
+| [src/agent/executor.ts](src/agent/executor.ts)         | `LlmExecutor` — wires the model pair, prompt, and tools into the turn loop.                    |
+| [src/agent/loop.ts](src/agent/loop.ts)                 | Stateless turn runner: `generateText` loop, primary → fallback, transient handling.            |
+| [src/agent/model.ts](src/agent/model.ts)               | Workers-AI primary/fallback model pair (via AI Gateway); `ModelOverrides` test hook.           |
+| [src/agent/prompt.ts](src/agent/prompt.ts)             | Soul (frozen identity + rules) + per-request `callerContext` from the verified JWT.            |
+| [src/agent/tools.ts](src/agent/tools.ts)               | Placeholder `whoami` / `echo` tools — pure handlers split from AI-SDK `tool()` wiring.         |
+| [src/agent/messages.ts](src/agent/messages.ts)         | A2A text extraction (`textOf`) + `<turn>` provenance parsing (`parseTurn`).                    |
+| [src/agent/config.ts](src/agent/config.ts)             | Model ids, AI Gateway slug, and the loop step bound (constants).                               |
+| [src/agent/manifest.ts](src/agent/manifest.ts)         | AgentCard manifest definition (identity + skills).                                             |
 | [src/auth/card.ts](src/auth/card.ts)                   | Build + EdDSA-sign the AgentCard; derive the public card-signing JWKS.                         |
 | [src/auth/canonical.ts](src/auth/canonical.ts)         | Canonical-JSON serialization used for the card signature. **Mirrors the gateway — see below.** |
 | [src/auth/verify.ts](src/auth/verify.ts)               | Verify the inbound gateway identity JWT (sig + `iss` + `aud` + `exp` + `jku` origin).          |
 | [scripts/generate-keys.mjs](scripts/generate-keys.mjs) | Ed25519 JWK keypair generator.                                                                 |
 | [test/](test/)                                         | Vitest specs + [test/fixtures.ts](test/fixtures.ts) (fixed test keys, `makeGatewayToken`).     |
-| [wrangler.jsonc](wrangler.jsonc)                       | Worker config + `GATEWAY_ORIGINS` var.                                                         |
+| [wrangler.jsonc](wrangler.jsonc)                       | Worker config: `AI` binding + `GATEWAY_ORIGINS` var.                                           |
 
 ## Non-negotiable constraints
 
@@ -59,12 +66,15 @@ These are the things that silently break the contract or the trust model. Treat 
 - **Cloudflare Workers runtime**, not Node. `nodejs_compat` is on, but prefer Web APIs (`crypto`, `fetch`, `Response.json`, `TextEncoder`). Crypto goes through [`jose`](https://github.com/panva/jose).
 - TypeScript is `strict`. ESLint forbids `@typescript-eslint/no-explicit-any` and `@typescript-eslint/no-deprecated` (both `error`). Prefix intentionally-unused vars with `_`.
 - Prettier with `trailingComma: "none"`. Run `npm run format`; don't hand-format.
-- Module entry is `satisfies ExportedHandler<Env>`; bindings are typed via the `Env` interface in `src/index.ts` (mirrored in `wrangler.jsonc` vars).
+- Module entry is `satisfies ExportedHandler<Env>`; bindings are typed via the `Env` interface in [src/env.ts](src/env.ts) (mirrored by `wrangler.jsonc` bindings/vars).
 
 ## Tests
 
-- Use `@cloudflare/vitest-pool-workers` — specs run inside the Workers runtime. Config: [vitest.config.ts](vitest.config.ts).
-- The suite is **hermetic**: `MockAgent` with `disableNetConnect()` intercepts the gateway JWKS fetch; any unmocked outbound request throws. Don't add real network calls in tests.
+- Two vitest projects (config: [vitest.config.ts](vitest.config.ts)):
+  - **`workers`** — the entrypoint + auth specs (`test/index.spec.ts`, `test/auth/**`) run inside the Workers runtime via `@cloudflare/vitest-pool-workers`.
+  - **`node`** — the agent-runtime specs (`test/agent/**`) run under Node. The tool loop is pure JS driven against an **injected mock model**, and workerd spuriously flags the mock's rejected `doGenerate` as an unhandled rejection.
+- The suite is **hermetic**: `MockAgent` with `disableNetConnect()` intercepts the gateway JWKS fetch; the LLM is a mock model ([test/agent/mock-model.ts](test/agent/mock-model.ts)) so no `AI` binding or network is used. Don't add real network/inference calls in tests.
+- **Split pure logic from AI-SDK wiring** so it unit-tests without an LLM (e.g. `whoami`/`echo` handlers, `parseTurn`, `callerContext`); drive the loop/executor with `mockModel(...)` / `throwingModel(...)` and the `ModelOverrides` constructor hook.
 - Test keys and `makeGatewayToken(...)` live in [test/fixtures.ts](test/fixtures.ts). Build gateway tokens through that helper so headers/claims stay consistent.
 - When adding a route or verification branch, cover it with both an accept and a reject case (mirror the existing `test/auth/verify.spec.ts` / `test/index.spec.ts` style).
 

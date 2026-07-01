@@ -16,7 +16,8 @@ import {
   verifyGatewayToken,
   type GatewayIdentity
 } from "./auth/verify";
-import { EchoExecutor } from "./agent/executor";
+import type { Env } from "./env";
+import { LlmExecutor } from "./agent/executor";
 
 /**
  * Reference remote A2A agent for looping-gateway.
@@ -33,13 +34,6 @@ import { EchoExecutor } from "./agent/executor";
  * No secret is ever shared between the gateway and this agent — trust flows
  * entirely on the domains and through asymmetric (Ed25519) signatures over public JWKS.
  */
-
-interface Env {
-  /** Ed25519 private JWK (with `kid`) used to sign this agent's AgentCard. */
-  A2A_SIGNING_KEY: string;
-  /** JSON array of trusted gateway origins, e.g. `["https://gw.example.com"]`. */
-  GATEWAY_ORIGINS: string;
-}
 
 /** Path serving this agent's card-signing public JWKS (the card's `jku`). */
 const JWKS_PATH = "/.well-known/jwks.json";
@@ -94,7 +88,7 @@ export default {
       const handler = new DefaultRequestHandler(
         buildBaseCard(origin),
         new InMemoryTaskStore(),
-        new EchoExecutor(identity)
+        new LlmExecutor(identity, env)
       );
       const rpc = new JsonRpcTransportHandler(handler);
       const result = await rpc.handle(body);
