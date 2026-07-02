@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { MockAgent } from "undici";
+import path from "path";
 import {
   GATEWAY_ORIGIN,
   TEST_AGENT_PRIVATE_JWK,
@@ -44,7 +45,7 @@ fetchMock
 // test-file startup.
 export default defineConfig({
   resolve: {
-    alias: { "@": new URL("./src", import.meta.url).pathname }
+    alias: { "@": path.resolve(import.meta.dirname, "./src") }
   },
   plugins: [
     cloudflareTest({

@@ -6,11 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "types": "wrangler types env.d.ts --include-runtime false",
+    "types": "wrangler types",
     "keygen": "node scripts/generate-keys.mjs",
     "format": "prettier --write .",
     "lint": "eslint .",
-    "check": "prettier --check . && eslint . && tsc && tsc -p test/tsconfig.json",
+    "check": "wrangler types --check && prettier --check . && eslint . && tsc && tsc -p test/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepare": "husky"
@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.17.0",
-    "@cloudflare/workers-types": "^4.20260619.1",
+    "@types/node": "^26.1.0",
     "eslint": "^10.6.0",
     "husky": "^9.1.7",
     "prettier": "^3.9.4",

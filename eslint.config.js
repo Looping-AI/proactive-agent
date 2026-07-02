@@ -34,6 +34,6 @@ export default tseslint.config(
     }
   },
   {
-    ignores: ["env.d.ts", "node_modules/", ".wrangler/"]
+    ignores: ["worker-configuration.d.ts", "node_modules/", ".wrangler/"]
   }
 );

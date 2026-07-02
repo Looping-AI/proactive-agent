@@ -17,14 +17,16 @@ npm install            # install deps
 npm run dev            # wrangler dev (local Worker); press `t` for a quick tunnel
 npm run test           # vitest run (whole suite in the Workers runtime via one cloudflareTest pool; hermetic — no network)
 npm run test:watch     # vitest watch
-npm run check          # prettier --check && eslint && tsc (src) && tsc (test)  ← CI + pre-commit gate
+npm run check          # wrangler types --check && prettier --check && eslint && tsc (src) && tsc (test)  ← CI + pre-commit gate
 npm run lint           # eslint only
 npm run format         # prettier --write .
-npm run types          # regenerate env.d.ts from wrangler bindings
+npm run types          # regenerate worker-configuration.d.ts (wrangler types) — then commit it
 npm run keygen <kid>   # generate an Ed25519 private JWK for A2A_SIGNING_KEY
 ```
 
 `npm run check` is the source of truth: it runs in CI ([.github/workflows/test.yml](.github/workflows/test.yml)) and as the husky `pre-commit` hook. Run `npm run check && npm run test` before committing — the commit will be rejected otherwise.
+
+**Types come from a committed, generated [worker-configuration.d.ts](worker-configuration.d.ts)** — `wrangler types` produces full _runtime_ types tailored to `wrangler.jsonc`'s compat date / flags / bindings. This file (plus `@types/node`, because `nodejs_compat` is on) is the source of the ambient Workers globals (`Ai`, `DurableObjectNamespace`, `ExportedHandler`, `Request`, …); it replaced `@cloudflare/workers-types`. It's **committed to git** and referenced from `tsconfig.json` / `test/tsconfig.json` `types`. `npm run check` leads with `wrangler types --check` as a drift guard, so after any `wrangler.jsonc` binding change or a wrangler/workerd bump (incl. dependabot's cloudflare group), run `npm run types` and **commit the regenerated file** or the gate fails. Note `src/env.ts`'s hand-written `Env` is separate and stays — it also carries the secrets, which the generated `Env` omits.
 
 ## Layout
 
@@ -66,7 +68,7 @@ These are the things that silently break the contract or the trust model. Treat 
 
 ## Runtime & style
 
-- **Cloudflare Workers runtime**, not Node. `nodejs_compat` is on, but prefer Web APIs (`crypto`, `fetch`, `Response.json`, `TextEncoder`). Crypto goes through [`jose`](https://github.com/panva/jose).
+- **Cloudflare Workers runtime**, not Node. `nodejs_compat` is on, but prefer Web APIs (`crypto`, `fetch`, `Response.json`, `TextEncoder`). Crypto goes through [`jose`](https://github.com/panva/jose). `@types/node` is installed (for tooling/config like `vitest.config.ts`) — it will happily type Node built-ins that aren't in the Workers runtime, so it won't catch a Node API creeping into Worker code; that's on you.
 - The agent runtime is a **Durable Object** on the [`agents`](https://github.com/cloudflare/agents) SDK `Agent` base. Reach it only via the Worker's DO stub with **native Cloudflare RPC** (`await stub.converse(text, identity)`) — never `routeAgentRequest`, and **never re-implement an internal HTTP/JSON-RPC layer on top of the DO**: it's a private implementation detail of this Worker, not a network-reachable service, so the one real A2A server lives in the Worker (`src/index.ts`) and the DO just exposes plain async methods. Use `this.sql` for the Session — **do not override the DO `alarm()`** (the `Agent` base owns it). Sessions live under `agents/experimental/memory/*`.
 - TypeScript is `strict`. ESLint forbids `@typescript-eslint/no-explicit-any` and `@typescript-eslint/no-deprecated` (both `error`). Prefix intentionally-unused vars with `_`.
 - Prettier with `trailingComma: "none"`. Run `npm run format`; don't hand-format.

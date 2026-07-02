@@ -13,14 +13,11 @@ import { sessionText } from "@/agent/history";
  * and reading state directly with `runInDurableObject`. It doesn't care how a
  * caller got here, so no gateway JWT is involved.
  *
- * `cloudflare:test`'s `env` type comes from the ambient, gitignored (locally
- * generated) `env.d.ts` — cast it to a self-contained shape here so these
- * tests still typecheck when that file hasn't been regenerated.
+ * `cloudflare:test`'s `env` is typed from the committed, generated
+ * `worker-configuration.d.ts` ambient `Env`, which includes `ProactiveAgent`.
  */
 
-const ProactiveAgentNamespace = (
-  env as unknown as { ProactiveAgent: DurableObjectNamespace<ProactiveAgent> }
-).ProactiveAgent;
+const ProactiveAgentNamespace = env.ProactiveAgent;
 
 /** The verified caller a real Worker would pass to `converse`. */
 const IDENTITY = { key: "test:1:ada", name: "Ada", kind: "custom" };
