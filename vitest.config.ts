@@ -1,6 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { cloudflarePool } from "@cloudflare/vitest-pool-workers";
-import { resolve } from "path";
+import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { MockAgent } from "undici";
 import {
   GATEWAY_ORIGIN,
@@ -21,50 +20,46 @@ fetchMock
   })
   .persist();
 
+// The whole suite runs in the Workers runtime (workerd via miniflare) through a
+// single `cloudflareTest()` pool — including the agent-runtime specs under
+// `test/agent/**`, which drive `runTurn` against an injected mock model + a fake
+// `SessionLike`. Error-path tests inject failure by throwing synchronously from
+// the model factory (see test/agent/loop.spec.ts) rather than passing a model
+// whose `doGenerate` rejects into `generateText` — the latter leaks an unhandled
+// rejection through the AI SDK telemetry span that workerd flags as a failure.
+//
+// The pool reads wrangler.jsonc directly (main, compat settings, the AI binding,
+// and the ProactiveAgent DO + its SQLite migration) so this config can't drift from
+// it; only the two secrets deliberately kept out of wrangler.jsonc (see AGENTS.md
+// "Secrets") are supplied inline.
+//
+// `remoteBindings: false` is required, not just the default: Workers AI has no
+// local execution mode (Miniflare always proxies `AI` through a remote-connection
+// worker), and leaving `remoteBindings` unset — even though `false` is its
+// documented default — measurably makes the pool eagerly establish that remote
+// connection per test file (~15-20s total, plus a reproducible hang at teardown:
+// "close timed out after 10000ms"). Passing `false` explicitly (matching
+// looping-gateway's own config) avoids it entirely: `AI.run()` still fails
+// gracefully the moment a turn actually calls it, but nothing is attempted at
+// test-file startup.
 export default defineConfig({
   resolve: {
-    alias: { "@": resolve(__dirname, "src") }
+    alias: { "@": new URL("./src", import.meta.url).pathname }
   },
-  test: {
-    projects: [
-      // Agent runtime (LLM tool loop, prompt, tools, messages): pure JS that
-      // drives the AI SDK against an injected mock model — no workerd needed.
-      // (workerd's promise tracking spuriously flags the mock's rejected
-      // `doGenerate` as an unhandled rejection, so these run under Node.)
-      {
-        extends: true,
-        test: {
-          name: "node",
-          include: ["test/agent/**/*.spec.ts"],
-          environment: "node"
-        }
-      },
-      // Worker entrypoint + zero-trust auth: exercise the real fetch handler in
-      // workerd via miniflare, with the gateway JWKS fetch mocked.
-      {
-        extends: true,
-        test: {
-          name: "workers",
-          include: ["test/**/*.spec.ts"],
-          exclude: ["test/agent/**"],
-          pool: cloudflarePool({
-            main: "./src/index.ts",
-            // Inline the compat settings instead of reading wrangler.jsonc so the
-            // pool doesn't provision the real `AI` binding — it forces a remote
-            // connection (and a slow teardown) that these tests never use (the
-            // entrypoint test supplies its own env; auth tests don't touch AI).
-            miniflare: {
-              compatibilityDate: "2026-03-02",
-              compatibilityFlags: ["nodejs_compat"],
-              fetchMock,
-              bindings: {
-                A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
-                GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN])
-              }
-            }
-          })
+  plugins: [
+    cloudflareTest({
+      wrangler: { configPath: "./wrangler.jsonc" },
+      remoteBindings: false,
+      miniflare: {
+        fetchMock,
+        bindings: {
+          A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
+          GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN])
         }
       }
-    ]
+    })
+  ],
+  test: {
+    include: ["test/**/*.spec.ts"]
   }
 });

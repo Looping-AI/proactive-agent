@@ -14,8 +14,9 @@ export const manifest: AgentManifest = {
   name: "Example Agent",
   description:
     "Reference remote A2A agent for looping-gateway. Verifies the gateway " +
-    "identity JWT, then answers the caller via a Workers-AI tool loop.",
-  version: "0.2.1",
+    "identity JWT, then answers the caller via a Workers-AI tool loop with a " +
+    "durable per-caller memory (one continuous, self-compacting conversation).",
+  version: "0.3.0",
   capabilities: { streaming: false, pushNotifications: false },
   defaultInputModes: ["text/plain"],
   defaultOutputModes: ["text/plain"],

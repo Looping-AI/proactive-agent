@@ -5,7 +5,7 @@ import {
   GatewayAuthError,
   verifyGatewayToken,
   IDENTITY_CLAIM
-} from "@/auth/verify";
+} from "@/a2a/verify";
 import {
   makeGatewayToken,
   GATEWAY_ORIGIN,

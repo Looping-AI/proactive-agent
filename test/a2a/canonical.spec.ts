@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canonicalCardPayload } from "@/auth/canonical";
+import { canonicalCardPayload } from "@/a2a/canonical";
 
 describe("canonicalCardPayload", () => {
   it("excludes the signatures field", () => {

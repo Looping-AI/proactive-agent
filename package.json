@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",
+    "agents": "^0.17.3",
     "ai": "^6.0.217",
     "jose": "^6.2.3",
     "workers-ai-provider": "^3.3.0",
@@ -37,6 +38,7 @@
     "esbuild": false,
     "fsevents": false,
     "sharp": false,
-    "workerd": false
+    "workerd": false,
+    "core-js-pure": false
   }
 }

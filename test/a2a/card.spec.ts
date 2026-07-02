@@ -6,8 +6,8 @@ import {
   publicCardJwks,
   signCard,
   A2A_RPC_PATH
-} from "@/auth/card";
-import { canonicalCardPayload } from "@/auth/canonical";
+} from "@/a2a/card";
+import { canonicalCardPayload } from "@/a2a/canonical";
 import { TEST_AGENT_PRIVATE_JWK } from "../fixtures";
 
 const ORIGIN = "https://agent.example.com";

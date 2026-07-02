@@ -1,10 +1,13 @@
-import type { ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
-import type { Message } from "@a2a-js/sdk";
 import type { ToolSet } from "ai";
 import { generateText, stepCountIs } from "ai";
 import type { ModelPair } from "./model";
-import { MAX_STEPS } from "./config";
-import { textOf } from "./messages";
+import { MAX_STEPS } from "@/config";
+import {
+  assistantSessionMessage,
+  toModelMessages,
+  userSessionMessage
+} from "./history";
+import type { SessionLike } from "./session";
 
 export const TRANSIENT_REPLY =
   "The AI service is temporarily unavailable. Please try again in a moment.";
@@ -20,52 +23,47 @@ export function isTransientAiError(err: unknown): boolean {
   );
 }
 
-export interface AgentTurnConfig {
+/** Everything a single agent turn needs, assembled by the DO before the loop runs. */
+export interface RunTurnArgs {
+  /** The Durable Object's one continuous Session (history + soul + memory). */
+  session: SessionLike;
+  /** The inbound user text (keeps its `<turn>` provenance wrapper verbatim). */
+  text: string;
+  /** Per-request system-prompt suffix (verified caller context). Advisory. */
+  systemSuffix: string;
+  /** Agent-specific tools, merged over the session's own `set_context` tool. */
+  tools: ToolSet;
   /** Primary + fallback model pair. */
   models: ModelPair;
-  /** Frozen system prompt for this turn (soul + caller context). */
-  system: string;
-  /** Tools the model may call this turn. */
-  tools: ToolSet;
   /** Friendly reply for an unexpected (non-transient) failure. */
   unexpectedReply: string;
 }
 
-function publish(
-  eventBus: ExecutionEventBus,
-  contextId: string,
-  text: string
-): void {
-  const reply: Message = {
-    kind: "message",
-    messageId: crypto.randomUUID(),
-    role: "agent",
-    parts: [{ kind: "text", text }],
-    contextId
-  };
-  eventBus.publish(reply);
-}
-
 /**
- * Run a single stateless agent turn: a Workers-AI `generateText` tool loop over
- * the one inbound user message (primary → fallback model on any error), publish
- * the final reply, and always `finished()`. No persistence — history/memory
- * arrive in a later phase. The `<turn>` provenance wrapper (if any) is left in
- * the user text verbatim for the model to read.
+ * Run a single agent turn against the DO's continuous Session: append the user
+ * message, run a Workers-AI `generateText` tool loop over the Session history
+ * (primary → fallback model on any error), persist the assistant reply, and
+ * return the final reply text. The inbound text keeps its `<turn>` provenance
+ * wrapper verbatim for the model (and Phase-3 recall) to read.
+ *
+ * **Never throws**: a transient (capacity/timeout) failure resolves to a
+ * friendly "try again" message, an unexpected failure to `unexpectedReply`, so
+ * the DO's `converse()` caller always gets a string to publish.
  */
-export async function executeAgentTurn(
-  requestContext: RequestContext,
-  eventBus: ExecutionEventBus,
-  cfg: AgentTurnConfig
-): Promise<void> {
-  const text = textOf(requestContext.userMessage);
-  let modelId = cfg.models.primaryId();
+export async function runTurn(args: RunTurnArgs): Promise<string> {
+  const { session, text, systemSuffix, tools: extraTools, models } = args;
+  let modelId = models.primaryId();
 
   try {
+    await session.appendMessage(userSessionMessage(text));
+    const history = await session.getHistory();
+    const system = (await session.refreshSystemPrompt()) + systemSuffix;
+    const tools = { ...(await session.tools()), ...extraTools };
+
     const generateArgs = {
-      system: cfg.system,
-      messages: [{ role: "user" as const, content: text }],
-      tools: cfg.tools,
+      system,
+      messages: toModelMessages(history),
+      tools,
       stopWhen: stepCountIs(MAX_STEPS),
       // We do our own primary → fallback recovery below, so disable the SDK's
       // per-model exponential-backoff retries — they'd only add latency on a
@@ -76,21 +74,17 @@ export async function executeAgentTurn(
     let result: Awaited<ReturnType<typeof generateText>>;
     try {
       result = await generateText({
-        model: cfg.models.primary(),
+        model: models.primary(),
         ...generateArgs
       });
     } catch (primaryErr) {
       console.warn(
         "[agent-loop] AI error on primary model, retrying with fallback",
-        {
-          model: modelId,
-          error: String(primaryErr),
-          contextId: requestContext.contextId
-        }
+        { model: modelId, error: String(primaryErr) }
       );
-      modelId = cfg.models.fallbackId();
+      modelId = models.fallbackId();
       result = await generateText({
-        model: cfg.models.fallback(),
+        model: models.fallback(),
         ...generateArgs
       });
     }
@@ -102,32 +96,25 @@ export async function executeAgentTurn(
       if (finishReason === "length") {
         console.warn(
           "[agent-loop] model response truncated (finish_reason=length)",
-          { model: modelId, contextId: requestContext.contextId }
+          { model: modelId }
         );
       } else {
         console.warn("[agent-loop] empty response from model", {
           model: modelId,
-          finishReason,
-          contextId: requestContext.contextId
+          finishReason
         });
       }
-      publish(eventBus, requestContext.contextId, TRANSIENT_REPLY);
-      return;
+      return TRANSIENT_REPLY;
     }
 
-    publish(eventBus, requestContext.contextId, replyText);
+    await session.appendMessage(assistantSessionMessage(replyText));
+    return replyText;
   } catch (err) {
     console.error("[agent-loop] turn failed", {
-      contextId: requestContext.contextId,
       model: modelId,
       err: String(err),
       stack: err instanceof Error ? err.stack : undefined
     });
-    const reply = isTransientAiError(err)
-      ? TRANSIENT_REPLY
-      : cfg.unexpectedReply;
-    publish(eventBus, requestContext.contextId, reply);
-  } finally {
-    eventBus.finished();
+    return isTransientAiError(err) ? TRANSIENT_REPLY : args.unexpectedReply;
   }
 }

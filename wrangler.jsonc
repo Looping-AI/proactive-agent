@@ -14,5 +14,12 @@
   // Workers AI binding backing the agent's LLM tool loop (via AI Gateway).
   "ai": {
     "binding": "AI"
-  }
+  },
+  // The agent runtime is a Durable Object (Agents-SDK `Agent`): one instance per
+  // calling gateway-agent (keyed by the verified JWT `identity.key`), each with
+  // its own SQLite-backed Session (continuous history + writable memory).
+  "durable_objects": {
+    "bindings": [{ "class_name": "ProactiveAgent", "name": "ProactiveAgent" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProactiveAgent"] }]
 }
