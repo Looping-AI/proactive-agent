@@ -17,7 +17,9 @@ const TEST_ENV: Env = {
   A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
   GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN]),
   AI: undefined as unknown as Ai,
-  ProactiveAgent: undefined as unknown as DurableObjectNamespace<ProactiveAgent>
+  ProactiveAgent:
+    undefined as unknown as DurableObjectNamespace<ProactiveAgent>,
+  VECTORIZE: undefined as unknown as VectorizeIndex
 };
 
 /** Captures what the Worker's executor called on the DO (instance key + `converse` args). */

@@ -1,6 +1,12 @@
 import { createWorkersAI } from "workers-ai-provider";
 import type { LanguageModel } from "ai";
-import { AI_GATEWAY_ID, CHAT_MODEL_ID, CHAT_FALLBACK_MODEL_ID } from "@/config";
+import { embedMany } from "ai";
+import {
+  AI_GATEWAY_ID,
+  CHAT_MODEL_ID,
+  CHAT_FALLBACK_MODEL_ID,
+  EMBEDDING_MODEL_ID
+} from "@/config";
 
 /** The model used by the agent tool loop. */
 export function chatModel(env: Env): LanguageModel {
@@ -18,6 +24,32 @@ export function fallbackChatModel(env: Env): LanguageModel {
     gateway: { id: AI_GATEWAY_ID }
   });
   return workersai(CHAT_FALLBACK_MODEL_ID);
+}
+
+/**
+ * Embed a batch of texts for episodic recall. Uses the same Workers-AI + AI
+ * Gateway path as the chat models so embeddings get the same gateway
+ * observability/caching. The output dimension must match the Vectorize index.
+ */
+export type Embed = (texts: string[]) => Promise<number[][]>;
+
+export async function embedTexts(
+  env: Env,
+  texts: string[]
+): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const workersai = createWorkersAI({
+    binding: env.AI,
+    gateway: { id: AI_GATEWAY_ID }
+  });
+  const { embeddings } = await embedMany({
+    model: workersai.embedding(EMBEDDING_MODEL_ID),
+    values: texts,
+    // We surface failures to the caller (best-effort archival swallows them);
+    // the SDK's retry/backoff would only add latency on a hard failure.
+    maxRetries: 0
+  });
+  return embeddings;
 }
 
 export interface ModelOverrides {

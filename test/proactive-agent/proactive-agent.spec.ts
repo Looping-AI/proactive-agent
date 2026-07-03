@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
-import type { SessionMessage } from "agents/experimental/memory/session";
-import type { ProactiveAgent } from "@/proactive-agent";
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { sessionText } from "@/agent/history";
 
 /**
@@ -43,7 +42,7 @@ describe("ProactiveAgent — Session persistence (real SQLite)", () => {
     await converse(stub, "remember: my favorite color is teal");
 
     const history = await runInDurableObject(stub, (instance) =>
-      instance.getSession().getHistory()
+      instance.getSession(IDENTITY).getHistory()
     );
     expect(history).toHaveLength(1);
     expect(history[0].role).toBe("user");

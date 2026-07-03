@@ -27,6 +27,17 @@
     "bindings": [{ "class_name": "ProactiveAgent", "name": "ProactiveAgent" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProactiveAgent"] }],
+  // Episodic recall: the messages each Session compaction displaces are embedded
+  // (Workers AI `@cf/baai/bge-m3`, 1024-dim) and upserted into this Vectorize
+  // index, namespaced per DO instance.
+  // Vectorize has no local mode, so tests inject a fake index.
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "proactive-agent-recall",
+      "remote": true
+    }
+  ],
   "secrets": {
     "required": ["A2A_SIGNING_KEY", "GATEWAY_ORIGINS"]
   }

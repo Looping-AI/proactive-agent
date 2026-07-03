@@ -75,13 +75,21 @@ caller gets SQLite-backed state.
 - New dep: `agents`. Wrangler: `ProactiveAgent` Durable Object binding + SQLite migration.
 - **Outcome:** the agent remembers across turns and maintains durable facts per caller.
 
-## Phase 3 — Episodic recall (Vectorize)
+## Phase 3 — Episodic recall (Vectorize) ✅ DONE
 
 Give the agent memory beyond the live context window.
 
-- Port **recall** (`shared/recall.ts`): archive compacted-away messages into **Vectorize** (embeddings), namespaced per DO instance, with `<turn>`-parsed metadata (author/channel/at).
-- Port the single **`recall` tool** (`shared/recall-tool.ts`), gated on "has compacted at least once", namespace bound by the instance (never model input).
-- Wrangler: `VECTORIZE` binding + embedding model id.
+- **Recall** ([`src/agent/recall.ts`](src/agent/recall.ts)): the Session's `onArchive` seam
+  now archives compacted-away messages into **Vectorize** (`embedTexts` → `@cf/baai/bge-m3`,
+  1024-dim/cosine, via AI Gateway), namespaced per DO instance from the verified
+  `identity.key`, with `<turn>`-parsed metadata (author/channel/at). Vector id = message id
+  (idempotent upsert); archival is best-effort (failures swallowed so compaction still runs).
+- The single **`recall` tool** ([`src/agent/tools.ts`](src/agent/tools.ts)) is gated on "has
+  compacted at least once" (`getCompactions()` non-empty) and only added to the toolset then;
+  the namespace/index/embed are closed over (never model input), the model supplies only a
+  query string.
+- Wrangler: `VECTORIZE` binding + `EMBEDDING_MODEL_ID`/`RECALL_*` in [`src/config.ts`](src/config.ts).
+  Index created out of band: `wrangler vectorize create proactive-agent-recall --dimensions=1024 --metric=cosine`.
 - **Outcome:** the agent can semantically recall older history that scrolled out of context.
 
 ## Phase 4 — Real domain tools + authorization

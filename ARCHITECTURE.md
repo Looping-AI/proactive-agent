@@ -74,6 +74,15 @@ DO backs a **Session** with `this.sql`:
   the seams for that.
 - **Compaction** keeps the context lean: history is automatically compacted once
   it grows past `COMPACT_AFTER_TOKENS` (the Sessions `compactAfter` mechanism).
+- **Episodic recall** ([`src/agent/recall.ts`](src/agent/recall.ts)): the raw
+  messages each compaction displaces are embedded (Workers AI `@cf/baai/bge-m3`)
+  and upserted into **Vectorize** via the Session's `onArchive` seam, namespaced
+  per DO instance (the namespace is bound in code from the verified `identity.key`,
+  never from model input). A `recall` tool then lets the model semantically search
+  that archive for history that has scrolled out of the live context window. The
+  tool is gated on "has compacted at least once", so it only appears once there is
+  something to recall. Archival is best-effort — a Vectorize failure is swallowed so
+  compaction still shortens history.
 - **Model pair** ([`src/agent/model.ts`](src/agent/model.ts)): a primary + fallback
   Workers-AI model (via [`workers-ai-provider`](https://www.npmjs.com/package/workers-ai-provider)
   routed through an AI Gateway); also the compaction summarizer. Model ids, gateway
@@ -90,13 +99,13 @@ DO backs a **Session** with `this.sql`:
   a system suffix. The prompt is aware of the gateway's `<turn>` provenance wrapper
   (parsed, never authored — see [`src/agent/history.ts`](src/agent/history.ts)).
 - **Tools** ([`src/agent/tools.ts`](src/agent/tools.ts)): placeholder `whoami` /
-  `echo` tools (merged over the Session's own `set_context`) that prove tool-calling
-  end to end. `whoami` closes over the verified identity so it can't be spoofed.
-  Real domain tools (with per-call authorization) come in a later phase.
+  `echo` tools plus the `recall` episodic-memory search (merged over the Session's
+  own `set_context`). `whoami` and `recall` close over the verified identity /
+  instance namespace so neither can be spoofed from model input. Real domain tools
+  (with per-call authorization) come in a later phase.
 
-Episodic recall (Vectorize) and real domain tools are subsequent phases (see
-[`PLAN.md`](PLAN.md)); the Session compaction already exposes an `onArchive` seam
-for recall to wire into.
+Real domain tools + authorization and a self-service avatar are subsequent phases
+(see [`PLAN.md`](PLAN.md)).
 
 ## Canonical JSON (must match the gateway)
 
@@ -116,8 +125,15 @@ The card signature is computed over a deterministic serialization:
 | ----------------- | ------- | ---------------------------------------------------------------------------------------------------- |
 | `A2A_SIGNING_KEY` | secret  | Ed25519 private JWK (with `kid`) that signs the AgentCard.                                           |
 | `GATEWAY_ORIGINS` | secret  | JSON array of trusted gateway origins, e.g. `["https://gw.example.com"]`. Validates `jku` and `iss`. |
-| `AI`              | binding | Workers AI binding (routed via AI Gateway) backing the LLM tool loop.                                |
+| `AI`              | binding | Workers AI binding (routed via AI Gateway) backing the LLM tool loop + recall embeddings.            |
 | `ProactiveAgent`  | binding | Durable Object namespace — one instance per caller, holding the durable Session.                     |
+| `VECTORIZE`       | binding | Vectorize index (`proactive-agent-recall`, 1024-dim/cosine) storing per-instance episodic recall.    |
+
+> The recall index is created out of band before deploy (it must match the
+> embedding model's output):
+> `wrangler vectorize create proactive-agent-recall --dimensions=1024 --metric=cosine`.
+> Vectorize has no local-development mode, so `npm run dev` prints a warning and
+> the test suite injects a fake index rather than binding a real one.
 
 ## Files
 
@@ -133,7 +149,8 @@ The card signature is computed over a deterministic serialization:
 | [`src/agent/loop.ts`](src/agent/loop.ts)                             | `runTurn` — Session turn runner (primary → fallback, transient handling).                                    |
 | [`src/agent/model.ts`](src/agent/model.ts)                           | Workers-AI primary/fallback model pair (via AI Gateway).                                                     |
 | [`src/agent/prompt.ts`](src/agent/prompt.ts)                         | Soul (identity + rules) + per-request caller context.                                                        |
-| [`src/agent/tools.ts`](src/agent/tools.ts)                           | Placeholder `whoami` / `echo` tools (pure handlers + AI-SDK wiring).                                         |
+| [`src/agent/tools.ts`](src/agent/tools.ts)                           | `whoami` / `echo` placeholders + the gated `recall` tool (pure handlers + AI-SDK wiring).                    |
+| [`src/agent/recall.ts`](src/agent/recall.ts)                         | Episodic recall: embed + upsert compacted-away messages to Vectorize; semantic search.                       |
 | [`src/a2a/inbound.ts`](src/a2a/inbound.ts)                           | Inbound A2A message → text (`textOf`) — the one place touching the `@a2a-js/sdk` message shape.              |
 | [`src/agent/history.ts`](src/agent/history.ts)                       | `<turn>` provenance parsing + Session-history message glue (no A2A types).                                   |
 | [`src/config.ts`](src/config.ts)                                     | Model ids, AI Gateway slug, loop bound, Session/compaction tuning.                                           |
