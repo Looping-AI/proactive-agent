@@ -48,7 +48,7 @@ This agent therefore does three things:
 
 Once the JWT is verified, [`src/index.ts`](src/index.ts) runs the A2A JSON-RPC
 server for the call, and its [`A2AExecutor`](src/a2a/executor.ts) dispatches the
-turn into the [`ProactiveAgent`](src/agent/proactive-agent.ts) Durable Object with a
+turn into the [`ProactiveAgent`](src/proactive-agent/index.ts) Durable Object with a
 single native RPC call, passing the **verified** caller identity as a typed
 argument — **one instance per calling gateway-agent**, keyed by the verified
 `identity.key`. If the token carries no `key` the Worker refuses the call (400):
@@ -77,15 +77,14 @@ DO backs a **Session** with `this.sql`:
 - **Model pair** ([`src/agent/model.ts`](src/agent/model.ts)): a primary + fallback
   Workers-AI model (via [`workers-ai-provider`](https://www.npmjs.com/package/workers-ai-provider)
   routed through an AI Gateway); also the compaction summarizer. Model ids, gateway
-  slug, and Session tuning are constants in [`src/agent/config.ts`](src/agent/config.ts).
+  slug, and Session tuning are constants in [`src/config.ts`](src/config.ts).
 - **Turn loop** ([`src/agent/loop.ts`](src/agent/loop.ts)): `runTurn` appends the
   user turn to the Session, runs a bounded multi-step `generateText` loop
   (`stepCountIs(MAX_STEPS)`) over the Session history + soul + memory, persists the
   assistant reply, and returns the final reply text. Primary→fallback on error; a
   transient (capacity/timeout) or unexpected failure resolves to a friendly reply
   rather than throwing. [`ProactiveAgent.converse`](src/proactive-agent/index.ts) is the
-  DO's one public RPC method wrapping this, also handling best-effort maintenance
-  bookkeeping (activity timestamp + arming the maintenance trigger) after each turn.
+  DO's one public RPC method — it wraps `runTurn` and returns its result.
 - **Soul + caller context** ([`src/agent/prompt.ts`](src/agent/prompt.ts)): the frozen
   `"soul"` feeds the Session soul block; the verified caller is appended per turn as
   a system suffix. The prompt is aware of the gateway's `<turn>` provenance wrapper
@@ -122,21 +121,21 @@ The card signature is computed over a deterministic serialization:
 
 ## Files
 
-| File                                                           | Role                                                                                                         |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| [`src/index.ts`](src/index.ts)                                 | Worker entry: card / JWKS; verifies JWT, then runs the A2A JSON-RPC server dispatching into the caller's DO. |
-| [`src/a2a/card.ts`](src/a2a/card.ts)                           | Build + sign the AgentCard; derive public JWKS; parse signing key.                                           |
-| [`src/a2a/canonical.ts`](src/a2a/canonical.ts)                 | Canonical JSON contract (mirrors the gateway).                                                               |
-| [`src/a2a/verify.ts`](src/a2a/verify.ts)                       | Verify the gateway identity JWT.                                                                             |
-| [`src/proactive-agent/index.ts`](src/proactive-agent/index.ts) | `ProactiveAgent` DO — owns the caller's Session; `converse()` RPC method answers turns.                      |
-| [`src/agent/session.ts`](src/agent/session.ts)                 | The continuous Session (soul + memory + compaction).                                                         |
-| [`src/a2a/executor.ts`](src/a2a/executor.ts)                   | `A2AExecutor` — thin A2A glue calling the caller's DO via native RPC.                                        |
-| [`src/agent/loop.ts`](src/agent/loop.ts)                       | `runTurn` — Session turn runner (primary → fallback, transient handling).                                    |
-| [`src/agent/model.ts`](src/agent/model.ts)                     | Workers-AI primary/fallback model pair (via AI Gateway).                                                     |
-| [`src/agent/prompt.ts`](src/agent/prompt.ts)                   | Soul (identity + rules) + per-request caller context.                                                        |
-| [`src/agent/tools.ts`](src/agent/tools.ts)                     | Placeholder `whoami` / `echo` tools (pure handlers + AI-SDK wiring).                                         |
-| [`src/a2a/inbound.ts`](src/a2a/inbound.ts)                     | Inbound A2A message → text (`textOf`) — the one place touching the `@a2a-js/sdk` message shape.              |
-| [`src/agent/history.ts`](src/agent/history.ts)                 | `<turn>` provenance parsing + Session-history message glue (no A2A types).                                   |
-| [`src/config.ts`](src/config.ts)                               | Model ids, AI Gateway slug, loop bound, Session/compaction tuning.                                           |
-| [`src/agent/manifest.ts`](src/agent/manifest.ts)               | AgentCard identity + advertised skills.                                                                      |
-| [`scripts/generate-keys.mjs`](scripts/generate-keys.mjs)       | Ed25519 JWK keypair generator.                                                                               |
+| File                                                                 | Role                                                                                                         |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| [`src/index.ts`](src/index.ts)                                       | Worker entry: card / JWKS; verifies JWT, then runs the A2A JSON-RPC server dispatching into the caller's DO. |
+| [`src/a2a/card.ts`](src/a2a/card.ts)                                 | Build + sign the AgentCard; derive public JWKS; parse signing key.                                           |
+| [`src/a2a/canonical.ts`](src/a2a/canonical.ts)                       | Canonical JSON contract (mirrors the gateway).                                                               |
+| [`src/a2a/verify.ts`](src/a2a/verify.ts)                             | Verify the gateway identity JWT.                                                                             |
+| [`src/proactive-agent/index.ts`](src/proactive-agent/index.ts)       | `ProactiveAgent` DO — owns the caller's Session; `converse()` RPC method answers turns.                      |
+| [`src/agent/session.ts`](src/agent/session.ts)                       | The continuous Session (soul + memory + compaction).                                                         |
+| [`src/a2a/executor.ts`](src/a2a/executor.ts)                         | `A2AExecutor` — thin A2A glue calling the caller's DO via native RPC.                                        |
+| [`src/agent/loop.ts`](src/agent/loop.ts)                             | `runTurn` — Session turn runner (primary → fallback, transient handling).                                    |
+| [`src/agent/model.ts`](src/agent/model.ts)                           | Workers-AI primary/fallback model pair (via AI Gateway).                                                     |
+| [`src/agent/prompt.ts`](src/agent/prompt.ts)                         | Soul (identity + rules) + per-request caller context.                                                        |
+| [`src/agent/tools.ts`](src/agent/tools.ts)                           | Placeholder `whoami` / `echo` tools (pure handlers + AI-SDK wiring).                                         |
+| [`src/a2a/inbound.ts`](src/a2a/inbound.ts)                           | Inbound A2A message → text (`textOf`) — the one place touching the `@a2a-js/sdk` message shape.              |
+| [`src/agent/history.ts`](src/agent/history.ts)                       | `<turn>` provenance parsing + Session-history message glue (no A2A types).                                   |
+| [`src/config.ts`](src/config.ts)                                     | Model ids, AI Gateway slug, loop bound, Session/compaction tuning.                                           |
+| [`src/proactive-agent/manifest.ts`](src/proactive-agent/manifest.ts) | AgentCard identity + advertised skills.                                                                      |
+| [`scripts/generate-keys.mjs`](scripts/generate-keys.mjs)             | Ed25519 JWK keypair generator.                                                                               |
