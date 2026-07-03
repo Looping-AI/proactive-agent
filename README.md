@@ -1,4 +1,4 @@
-# Looping AI Remote A2A Agent Template
+# Looping AI Proactive Agent
 
 A complete, deployable **reference custom agent** for
 [looping-gateway](https://github.com/Looping-AI/looping-gateway). It shows
@@ -56,14 +56,14 @@ Use that URL when registering the agent on the gateway (step 6). The limitation 
 Requires a domain managed by Cloudflare (free tier works). One-time setup:
 
 ```sh
-npx wrangler tunnel create remote-agent-dev
-npx wrangler tunnel route dns remote-agent-dev <your-subdomain.yourdomain.com>
+npx wrangler tunnel create proactive-agent-dev
+npx wrangler tunnel route dns proactive-agent-dev <your-subdomain.yourdomain.com>
 ```
 
 Then start your dev server with the tunnel in one command:
 
 ```sh
-npx wrangler dev --tunnel --tunnel-name remote-agent-dev
+npx wrangler dev --tunnel --tunnel-name proactive-agent-dev
 ```
 
 Register the agent once at `https://<your-subdomain.yourdomain.com>` and the URL stays valid across restarts.
@@ -98,7 +98,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full trust model, sequence diagra
 
 ## Feedback
 
-Found a bug or have a question? [Open an issue](https://github.com/Looping-AI/remote-agent/issues) — bug reports, questions, and improvement ideas are all welcome.
+Found a bug or have a question? [Open an issue](https://github.com/Looping-AI/proactive-agent/issues) — bug reports, questions, and improvement ideas are all welcome.
 
 ## Contributing
 

@@ -1,8 +1,8 @@
-# Plan: Grow `remote-agent` from Echo → full-fledged A2A agent
+# Plan: Grow `proactive-agent` from Echo → full-fledged A2A agent
 
 ## Context
 
-`remote-agent` is a **stateful reference remote A2A agent** for
+`proactive-agent` is a **stateful proactive A2A agent** for
 [looping-gateway](https://github.com/Looping-AI/looping-gateway), running on a
 single **Cloudflare Worker** with a **`ProactiveAgent` Durable Object** runtime
 (one instance per calling gateway-agent). Phases 1 & 2 are done: the agent

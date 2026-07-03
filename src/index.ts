@@ -21,7 +21,7 @@ import { A2AExecutor } from "./a2a/executor";
 export { ProactiveAgent } from "./proactive-agent";
 
 /**
- * Reference remote A2A agent for looping-gateway.
+ * Reference remote and proactive A2A agent for looping-gateway.
  *
  * The outer Worker owns the zero-trust, no-shared-secrets contract and runs the
  * one A2A JSON-RPC server, dispatching each verified call into the agent
