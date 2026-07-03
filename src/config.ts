@@ -33,3 +33,29 @@ export const COMPACT_AFTER_TOKENS = 60_000;
 export const MEMORY_DESCRIPTION =
   "Durable facts worth remembering across all of this caller's conversations — " +
   "stable preferences, decisions, people, and context. Keep it concise.";
+
+/**
+ * Episodic recall (Vectorize) tuning.
+ *
+ * When history is compacted, the raw messages it displaces are embedded and
+ * stored in Vectorize (namespaced per Durable Object instance). A `recall` tool
+ * lets the model semantically search that archive for history that has scrolled
+ * out of the live context window. See {@link file://./agent/recall.ts}.
+ */
+
+/**
+ * Workers AI text-embedding model backing recall. Its output dimension/metric
+ * must match the Vectorize index (`--dimensions=1024 --metric=cosine`); changing
+ * it means recreating the index.
+ */
+export const EMBEDDING_MODEL_ID = "@cf/baai/bge-m3";
+
+/** Default number of archived messages a single `recall` query returns. */
+export const RECALL_TOP_K = 5;
+
+/**
+ * Max chars of a message's text stored in its Vectorize vector metadata. Keeps
+ * each vector's metadata under Vectorize's ~10 KiB/vector limit; recall returns
+ * this snippet plus provenance, not the full original message.
+ */
+export const RECALL_METADATA_TEXT_MAX = 2000;

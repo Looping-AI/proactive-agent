@@ -1,9 +1,11 @@
 import tseslint from "typescript-eslint";
 
+const LINTED_FILES = ["src/**/*.ts", "test/**/*.ts"];
+
 export default tseslint.config(
   {
     extends: [...tseslint.configs.recommended],
-    files: ["src/**/*.ts"],
+    files: LINTED_FILES,
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "no-unused-expressions": "off",
@@ -20,7 +22,7 @@ export default tseslint.config(
   {
     // Type-aware pass — enables @deprecated detection without switching the
     // whole config to recommendedTypeChecked and its stricter rule set.
-    files: ["src/**/*.ts"],
+    files: LINTED_FILES,
     plugins: { "@typescript-eslint": tseslint.plugin },
     languageOptions: {
       parser: tseslint.parser,
