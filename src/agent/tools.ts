@@ -1,6 +1,6 @@
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
-import type { GatewayIdentity } from "../auth/verify";
+import type { GatewayIdentity } from "@/a2a/verify";
 
 /**
  * Phase-1 placeholder tools that prove tool-calling works end to end. Real domain

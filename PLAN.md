@@ -2,17 +2,19 @@
 
 ## Context
 
-`remote-agent` is today a **reference/echo** A2A agent: a stateless Cloudflare
-Worker that serves a signed AgentCard + JWKS, verifies the gateway identity JWT,
-and runs [`EchoExecutor`](src/agent/executor.ts) which just replies
-`"Hello {who}, you said: …"`. It has no LLM, no state, and no tools
-(deps are only `@a2a-js/sdk` + `jose`).
+`remote-agent` is a **stateful reference remote A2A agent** for
+[looping-gateway](https://github.com/Looping-AI/looping-gateway), running on a
+single **Cloudflare Worker** with a **`ProactiveAgent` Durable Object** runtime
+(one instance per calling gateway-agent). Phases 1 & 2 are done: the agent
+verifies the gateway JWT, maintains a durable per-caller Session (soul + memory +
+compaction, backed by `this.sql`), and runs a Workers-AI tool loop with
+placeholder `whoami` / `echo` tools. The outer Worker calls the DO via **native
+Cloudflare RPC** (`stub.converse(text, identity)`) — no internal A2A / JSON-RPC
+layer on the DO.
 
-The goal is to make it a real agent with the **same capabilities the
-looping-gateway Admin agent already has** (in `looping-gateway/src/agents/`):
-an LLM tool loop, durable per-conversation memory, episodic recall, real domain
-tools, and a self-generated avatar — while keeping the existing zero-trust A2A
-contract (signed card + gateway-JWT verification) untouched.
+The remaining phases add episodic recall (Vectorize), real domain tools, and a
+self-generated avatar, while keeping the existing zero-trust A2A contract
+(signed card + gateway-JWT verification) untouched.
 
 Work is split into incremental phases; each phase is a **separate future
 session**. This document is the high-level map only — each phase gets its own
@@ -25,10 +27,11 @@ detailed plan when we start it.
 - **Domain tools:** deferred — ship the framework with placeholder/example tools; real tools come in a later session.
 - **Avatar:** included as the final optional phase.
 
-The admin agent's shared machinery (`src/agents/shared/*`, `base.ts`, `model.ts`)
-is the reference implementation to port. It is checked out for reference during
-planning but is **not** a dependency — this repo re-implements the pieces it
-needs standalone (it has no `@/db`, no gateway internals).
+The admin agent's shared machinery (`src/agents/shared/*`, `model.ts`)
+was the reference implementation for porting. It is **not** a dependency —
+this repo re-implements the pieces it needs standalone (it has no `@/db`, no
+gateway internals). (`base.ts` was removed from the gateway during its own
+refactor and is no longer part of the reference.)
 
 ### Key mapping difference vs. admin
 
@@ -36,7 +39,7 @@ The admin agent runs _inside_ the gateway and gets its caller from dispatch
 metadata (`metadata.user`, `adminWorkspaceId`). This agent is **remote**: the
 gateway JWT only attests the **calling gateway-agent instance**
 (`GatewayIdentity`: `key`, `name`, `kind`, `workspaceId` — see
-[`src/auth/verify.ts`](src/auth/verify.ts)), never the Slack end user or their
+[`src/a2a/verify.ts`](src/a2a/verify.ts)), never the Slack end user or their
 roles — the gateway's `agent-jwt.ts` deliberately excludes `slackUserId`/
 `displayName` from this claim so a remote agent can't read the full caller
 auth context. The `<turn from=… id=… channel=… at=…>` provenance wrapper is
@@ -47,7 +50,7 @@ them.
 
 ---
 
-## Phase 1 — Real LLM tool loop (retire the echo)
+## Phase 1 — Real LLM tool loop (retire the echo) ✅ DONE
 
 Replace `EchoExecutor` with a Workers-AI `generateText` tool loop so the agent
 actually reasons and replies. **Stateless** at this stage (no persistence yet).
@@ -59,16 +62,18 @@ actually reasons and replies. **Stateless** at this stage (no persistence yet).
 - New deps: `ai`, `workers-ai-provider`. Wrangler: `AI` binding + AI Gateway id.
 - **Outcome:** agent converses and can call a tool; no memory yet.
 
-## Phase 2 — Durable state & memory (Sessions)
+## Phase 2 — Durable state & memory (Sessions) ✅ DONE
 
-Make the agent a **Durable Object** (Agents-SDK `Agent` base) and route A2A
-JSON-RPC into it, so each conversation/context gets SQLite-backed state.
+The agent runtime is now a **Durable Object** (Agents-SDK `Agent` base); the outer
+Worker verifies the JWT and dispatches the turn into it via native RPC, so each
+caller gets SQLite-backed state.
 
-- Port the **DO base** (`base.ts`): the DO _is_ its own A2A server via `DefaultRequestHandler`; `this.sql` backs Sessions. Keep the outer worker as the router / card + JWKS server, forwarding `POST` into a DO stub.
-- Port **Sessions** (`shared/session.ts`): read-only `"soul"` block + writable `"memory"` scratchpad the model self-edits + history **compaction** summarized by the same model.
-- Decide the **DO instance key** (per gateway caller? per context/thread?) — this is the analog of admin's `admin:{wsId}` namespace.
-- New dep: `agents`. Wrangler: Durable Object binding + migration.
-- **Outcome:** the agent remembers across turns and maintains durable facts.
+- **DO runtime** ([`src/proactive-agent/index.ts`](src/proactive-agent/index.ts)): a plain `Agent<Env>` exposing one public RPC method, `converse(text, identity)`; `this.sql` backs Sessions. The Worker owns the single A2A JSON-RPC server ([`index.ts`](src/index.ts) + [`executor.ts`](src/a2a/executor.ts)) and reaches the DO with a native Cloudflare RPC call (`stub.converse(...)`), passing the **verified** identity as a typed argument — no internal HTTP/JSON-RPC layer on the DO (it's a private implementation detail of the Worker, not a network-reachable service).
+- **Sessions** ([`session.ts`](src/agent/session.ts)): read-only `"soul"` block + writable `"memory"` scratchpad the model self-edits + history **compaction** summarized by the same model (`onArchive` seam left for Phase 3).
+- **DO instance key = the verified JWT `identity.key`** (one instance per calling gateway-agent; **no fallback** — a token without `key` is refused, 400). Each DO holds **one continuous Session** across all the caller's channels/threads.
+- **Compaction** fires on size (`compactAfter` — the Sessions `compactAfter` mechanism).
+- New dep: `agents`. Wrangler: `ProactiveAgent` Durable Object binding + SQLite migration.
+- **Outcome:** the agent remembers across turns and maintains durable facts per caller.
 
 ## Phase 3 — Episodic recall (Vectorize)
 
@@ -103,7 +108,7 @@ Cosmetic parity with admin.
 
 ## Cross-cutting (applies to every phase)
 
-- **Preserve the A2A contract**: signed card ([`src/auth/card.ts`](src/auth/card.ts)), JWKS, and gateway-JWT verification ([`src/auth/verify.ts`](src/auth/verify.ts), [`canonical.ts`](src/auth/canonical.ts)) stay intact — only the executor/serving path changes.
+- **Preserve the A2A contract**: signed card ([`src/a2a/card.ts`](src/a2a/card.ts)), JWKS, and gateway-JWT verification ([`src/a2a/verify.ts`](src/a2a/verify.ts), [`canonical.ts`](src/a2a/canonical.ts)) stay intact — only the executor/serving path changes.
 - **Update the manifest/card** capabilities as features land (`streaming`, `pushNotifications` are currently `false`).
 - **Tests**: keep the pure tool/handler logic split from AI-SDK wiring so it unit-tests without an LLM (admin's pattern); extend `vitest` coverage each phase.
 - **Docs**: update [`ARCHITECTURE.md`](ARCHITECTURE.md) + [`AGENTS.md`](AGENTS.md) each phase.
@@ -120,4 +125,5 @@ Cosmetic parity with admin.
 
 - https://github.com/Looping-AI/looping-gateway/tree/main/src/agents/admin
 - `looping-gateway/src/agents/`: `shared/{loop,session,recall,recall-tool,prompt,messages}.ts`,
-  `model.ts`, `base.ts`, and `admin/{executor,tools,prompt,avatar,index}.ts`.
+  `model.ts`, and `admin/{executor,tools,prompt,avatar,index}.ts`.
+  (`base.ts` was removed from the gateway during its own refactor; Phases 1 & 2 have been ported from the remaining files.)

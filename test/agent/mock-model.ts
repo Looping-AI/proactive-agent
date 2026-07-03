@@ -55,12 +55,3 @@ export function mockModel(...steps: MockStep[]): MockLanguageModelV3 {
     doGenerate: async () => stepResult(steps[Math.min(i++, steps.length - 1)])
   });
 }
-
-/** A mock model whose every generate call throws the given error message. */
-export function throwingModel(message: string): MockLanguageModelV3 {
-  return new MockLanguageModelV3({
-    doGenerate: async () => {
-      throw new Error(message);
-    }
-  });
-}

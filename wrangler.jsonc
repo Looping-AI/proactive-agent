@@ -12,7 +12,22 @@
     "enabled": true
   },
   // Workers AI binding backing the agent's LLM tool loop (via AI Gateway).
+  // `remote: true` reflects reality — Workers AI has no local execution mode and
+  // always hits remote resources — and suppresses wrangler's per-run warning. In
+  // tests the pool-level `remoteBindings: false` (vitest.config.ts) still overrides
+  // this and keeps the suite from eagerly opening that remote connection.
   "ai": {
-    "binding": "AI"
+    "binding": "AI",
+    "remote": true
+  },
+  // The agent runtime is a Durable Object (Agents-SDK `Agent`): one instance per
+  // calling gateway-agent (keyed by the verified JWT `identity.key`), each with
+  // its own SQLite-backed Session (continuous history + writable memory).
+  "durable_objects": {
+    "bindings": [{ "class_name": "ProactiveAgent", "name": "ProactiveAgent" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProactiveAgent"] }],
+  "secrets": {
+    "required": ["A2A_SIGNING_KEY", "GATEWAY_ORIGINS"]
   }
 }

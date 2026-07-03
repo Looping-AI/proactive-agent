@@ -6,37 +6,42 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "types": "wrangler types env.d.ts --include-runtime false",
+    "types": "wrangler types",
     "keygen": "node scripts/generate-keys.mjs",
     "format": "prettier --write .",
     "lint": "eslint .",
-    "check": "prettier --check . && eslint . && tsc && tsc -p test/tsconfig.json",
+    "check": "wrangler types --check && prettier --check . && eslint . && tsc && tsc -p test/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepare": "husky"
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",
-    "ai": "^6.0.216",
+    "agents": "^0.17.3",
+    "ai": "^6.0.219",
     "jose": "^6.2.3",
-    "workers-ai-provider": "^3.3.0",
+    "workers-ai-provider": "^3.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.17.0",
-    "@cloudflare/workers-types": "^4.20260619.1",
+    "@cloudflare/vitest-pool-workers": "^0.18.0",
+    "@types/node": "^26.1.0",
     "eslint": "^10.6.0",
     "husky": "^9.1.7",
-    "prettier": "^3.9.3",
+    "prettier": "^3.9.4",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^4.1.9",
-    "wrangler": "^4.103.0"
+    "wrangler": "^4.107.0"
+  },
+  "engines": {
+    "node": ">=24"
   },
   "allowScripts": {
     "esbuild": false,
     "fsevents": false,
     "sharp": false,
-    "workerd": false
+    "workerd": false,
+    "core-js-pure": false
   }
 }

@@ -9,27 +9,34 @@ import {
   parsePrivateJwk,
   publicCardJwks,
   signCard
-} from "./auth/card";
+} from "./a2a/card";
 import {
   GatewayAuthError,
   bearerToken,
   verifyGatewayToken,
   type GatewayIdentity
-} from "./auth/verify";
-import type { Env } from "./env";
-import { LlmExecutor } from "./agent/executor";
+} from "./a2a/verify";
+import { A2AExecutor } from "./a2a/executor";
+
+export { ProactiveAgent } from "./proactive-agent";
 
 /**
  * Reference remote A2A agent for looping-gateway.
  *
- * Demonstrates the full zero-trust, no-shared-secrets contract a third-party
- * custom agent must implement:
+ * The outer Worker owns the zero-trust, no-shared-secrets contract and runs the
+ * one A2A JSON-RPC server, dispatching each verified call into the agent
+ * Durable Object:
  *
  *  1. Publish the card-signing **public** JWKS at the card's `jku`.
  *  2. Serve a **signed** AgentCard at `…/.well-known/agent-card.json` so the
  *     gateway can verify+pin the agent's identity at registration ("G knows R").
  *  3. **Verify the gateway's identity JWT** on every JSON-RPC call against the
- *     gateway's public JWKS ("R knows G"), then echo the caller's message.
+ *     gateway's public JWKS ("R knows G"), then run the A2A JSON-RPC server for
+ *     this call. The {@link A2AExecutor} dispatches into the caller's
+ *     {@link file://./proactive-agent/index.ts ProactiveAgent} DO — one instance per
+ *     calling gateway-agent (keyed by the verified `identity.key`) — with a
+ *     single native Cloudflare RPC call (no internal wire protocol); the DO
+ *     holds that caller's durable Session and answers via the Workers-AI loop.
  *
  * No secret is ever shared between the gateway and this agent — trust flows
  * entirely on the domains and through asymmetric (Ed25519) signatures over public JWKS.
@@ -67,7 +74,7 @@ export default {
       return Response.json(card);
     }
 
-    // (3) A2A JSON-RPC — gateway-authenticated only.
+    // (3) A2A JSON-RPC — gateway-authenticated, dispatched into the caller's DO.
     if (request.method === "POST") {
       const token = bearerToken(request);
       if (!token) return unauthorized("missing gateway bearer token");
@@ -84,11 +91,20 @@ export default {
         return unauthorized(message);
       }
 
+      // The DO instance is keyed by the verified `identity.key`; without it the
+      // executor cannot route the call — refuse rather than fall back to a
+      // shared instance. Guaranteed non-null past this point.
+      if (!identity.key) {
+        return new Response("bad request: gateway identity missing key", {
+          status: 400
+        });
+      }
+
       const body = await request.json();
       const handler = new DefaultRequestHandler(
         buildBaseCard(origin),
         new InMemoryTaskStore(),
-        new LlmExecutor(identity, env)
+        new A2AExecutor(identity, env)
       );
       const rpc = new JsonRpcTransportHandler(handler);
       const result = await rpc.handle(body);

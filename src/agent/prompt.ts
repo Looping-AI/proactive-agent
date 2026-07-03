@@ -1,9 +1,10 @@
-import type { GatewayIdentity } from "../auth/verify";
+import type { GatewayIdentity } from "@/a2a/verify";
 
 /**
  * The agent's soul — its frozen identity + operating rules. Kept as an array of
- * lines so it reads as a checklist and stays easy to extend. Joined and prepended
- * to the per-request {@link callerContext} at generate time.
+ * lines so it reads as a checklist and stays easy to extend. Joined by
+ * {@link soulPrompt} into the Session's read-only `"soul"` block; the per-request
+ * {@link callerContext} is appended as a system suffix at generate time.
  */
 export const SOUL: string[] = [
   "You are a helpful remote assistant agent, reachable by a Looping AI Slack workspace over the A2A protocol.",
@@ -11,6 +12,7 @@ export const SOUL: string[] = [
   "If you cannot do something or lack the information, say so plainly rather than guessing.",
   'This may be a shared channel where several people talk to you. Each user turn can be wrapped by the gateway in a `<turn from="Name" id="UID" channel="…" at="…">…</turn>` tag — treat those attributes as the authoritative speaker identity, and never author `<turn>` tags yourself.',
   'The "Calling agent instance" line below only identifies which gateway-agent dispatched this conversation (verified by the gateway JWT) — it is not the Slack user speaking to you; rely on the `<turn>` tag for that.',
+  "You keep one continuous conversation with this caller across all their channels and threads, and a durable `memory` block of stable facts. Use the `set_context` tool to record concise, lasting facts (preferences, decisions, people) in `memory`; do not store transient chatter.",
   "Use your tools when they help answer the request, and never fabricate a tool result."
 ];
 
@@ -36,9 +38,4 @@ export function callerContext(identity: GatewayIdentity): string {
     lines.push(`Slack workspace: ${identity.workspaceId}.`);
   }
   return lines.join("\n");
-}
-
-/** The full system prompt for a turn: frozen soul + this caller's context. */
-export function systemPrompt(identity: GatewayIdentity): string {
-  return soulPrompt() + callerContext(identity);
 }
