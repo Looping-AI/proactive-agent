@@ -21,6 +21,10 @@ fetchMock
   })
   .persist();
 
+// Test defaults for required secrets. Real env vars (CI/shell) take precedence via ??=.
+process.env.A2A_SIGNING_KEY ??= JSON.stringify(TEST_AGENT_PRIVATE_JWK);
+process.env.GATEWAY_ORIGINS ??= JSON.stringify([GATEWAY_ORIGIN]);
+
 // The whole suite runs in the Workers runtime (workerd via miniflare) through a
 // single `cloudflareTest()` pool — including the agent-runtime specs under
 // `test/agent/**`, which drive `runTurn` against an injected mock model + a fake
@@ -31,8 +35,7 @@ fetchMock
 //
 // The pool reads wrangler.jsonc directly (main, compat settings, the AI binding,
 // and the ProactiveAgent DO + its SQLite migration) so this config can't drift from
-// it; only the two secrets deliberately kept out of wrangler.jsonc (see AGENTS.md
-// "Secrets") are supplied inline.
+// it; secrets are supplied via process.env above (real env vars take precedence).
 //
 // `remoteBindings: false` is required, not just the default: Workers AI has no
 // local execution mode (Miniflare always proxies `AI` through a remote-connection
@@ -51,13 +54,7 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       remoteBindings: false,
-      miniflare: {
-        fetchMock,
-        bindings: {
-          A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
-          GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN])
-        }
-      }
+      miniflare: { fetchMock }
     })
   ],
   test: {
