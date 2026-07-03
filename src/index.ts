@@ -16,7 +16,6 @@ import {
   verifyGatewayToken,
   type GatewayIdentity
 } from "./a2a/verify";
-import type { Env } from "./env";
 import { A2AExecutor } from "./a2a/executor";
 
 export { ProactiveAgent } from "./proactive-agent";

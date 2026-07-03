@@ -1,6 +1,5 @@
 import { Agent } from "agents";
 import type { GatewayIdentity } from "@/a2a/verify";
-import type { Env } from "@/env";
 import { createModelPair, type ModelPair } from "@/agent/model";
 import { callerContext, soulPrompt } from "@/agent/prompt";
 import { buildTools } from "@/agent/tools";

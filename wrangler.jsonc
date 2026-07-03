@@ -21,5 +21,8 @@
   "durable_objects": {
     "bindings": [{ "class_name": "ProactiveAgent", "name": "ProactiveAgent" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProactiveAgent"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProactiveAgent"] }],
+  "secrets": {
+    "required": ["A2A_SIGNING_KEY", "GATEWAY_ORIGINS"]
+  }
 }

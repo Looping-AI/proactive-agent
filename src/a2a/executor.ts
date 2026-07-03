@@ -5,7 +5,6 @@ import type {
 } from "@a2a-js/sdk/server";
 import type { Message } from "@a2a-js/sdk";
 import type { GatewayIdentity } from "./verify";
-import type { Env } from "@/env";
 import { textOf } from "./inbound";
 
 /** Reply published when the DO call itself fails (unreachable / transport fault). */

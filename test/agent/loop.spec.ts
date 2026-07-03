@@ -3,7 +3,6 @@ import type { LanguageModel, ToolSet } from "ai";
 import type { SessionMessage } from "agents/experimental/memory/session";
 import { runTurn, TRANSIENT_REPLY } from "@/agent/loop";
 import { createModelPair, type ModelPair } from "@/agent/model";
-import type { Env } from "@/env";
 import type { SessionLike } from "@/agent/session";
 import { sessionText } from "@/agent/history";
 import { mockModel } from "./mock-model";

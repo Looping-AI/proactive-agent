@@ -1,6 +1,5 @@
 import { createWorkersAI } from "workers-ai-provider";
 import type { LanguageModel } from "ai";
-import type { Env } from "@/env";
 import { AI_GATEWAY_ID, CHAT_MODEL_ID, CHAT_FALLBACK_MODEL_ID } from "@/config";
 
 /** The model used by the agent tool loop. */

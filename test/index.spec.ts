@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import worker from "@/index";
-import type { Env } from "@/env";
 import type { ProactiveAgent } from "@/proactive-agent";
 import type { GatewayIdentity } from "@/a2a/verify";
 import {
