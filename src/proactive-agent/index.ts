@@ -108,5 +108,8 @@ export class ProactiveAgent extends Agent<Env> {
  * is always present here.
  */
 function recallNamespace(identity: GatewayIdentity): string {
-  return identity.key ?? "";
+  if (!identity.key) {
+    throw new Error("identity.key is required for namespace isolation");
+  }
+  return identity.key;
 }

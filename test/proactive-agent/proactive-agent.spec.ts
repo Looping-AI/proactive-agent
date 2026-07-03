@@ -12,7 +12,7 @@ import { sessionText } from "@/agent/history";
  * and reading state directly with `runInDurableObject`. It doesn't care how a
  * caller got here, so no gateway JWT is involved.
  *
- * `cloudflare:test`'s `env` is typed from the committed, generated
+ * `env` from `cloudflare:workers` is typed from the committed, generated
  * `worker-configuration.d.ts` ambient `Env`, which includes `ProactiveAgent`.
  */
 

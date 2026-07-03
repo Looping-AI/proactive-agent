@@ -40,7 +40,7 @@ export const MEMORY_DESCRIPTION =
  * When history is compacted, the raw messages it displaces are embedded and
  * stored in Vectorize (namespaced per Durable Object instance). A `recall` tool
  * lets the model semantically search that archive for history that has scrolled
- * out of the live context window. See {@link file://./recall.ts}.
+ * out of the live context window. See {@link file://./agent/recall.ts}.
  */
 
 /**
