@@ -1,6 +1,7 @@
 import { createWorkersAI } from "workers-ai-provider";
 import type { LanguageModel } from "ai";
 import { embedMany } from "ai";
+import { env } from "cloudflare:workers";
 import {
   AI_GATEWAY_ID,
   CHAT_MODEL_ID,
@@ -8,21 +9,18 @@ import {
   EMBEDDING_MODEL_ID
 } from "@/config";
 
+const workersai = createWorkersAI({
+  binding: env.AI,
+  gateway: { id: AI_GATEWAY_ID }
+});
+
 /** The model used by the agent tool loop. */
-export function chatModel(env: Env): LanguageModel {
-  const workersai = createWorkersAI({
-    binding: env.AI,
-    gateway: { id: AI_GATEWAY_ID }
-  });
+export function chatModel(): LanguageModel {
   return workersai(CHAT_MODEL_ID);
 }
 
 /** Fallback model used when the primary model is over capacity or errors. */
-export function fallbackChatModel(env: Env): LanguageModel {
-  const workersai = createWorkersAI({
-    binding: env.AI,
-    gateway: { id: AI_GATEWAY_ID }
-  });
+export function fallbackChatModel(): LanguageModel {
   return workersai(CHAT_FALLBACK_MODEL_ID);
 }
 
@@ -33,15 +31,8 @@ export function fallbackChatModel(env: Env): LanguageModel {
  */
 export type Embed = (texts: string[]) => Promise<number[][]>;
 
-export async function embedTexts(
-  env: Env,
-  texts: string[]
-): Promise<number[][]> {
+export async function embedTexts(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
-  const workersai = createWorkersAI({
-    binding: env.AI,
-    gateway: { id: AI_GATEWAY_ID }
-  });
   const { embeddings } = await embedMany({
     model: workersai.embedding(EMBEDDING_MODEL_ID),
     values: texts,
@@ -66,17 +57,14 @@ export interface ModelPair {
 }
 
 /** Lazily build + memoize the primary/fallback model pair (overridable in tests). */
-export function createModelPair(
-  env: Env,
-  overrides: ModelOverrides = {}
-): ModelPair {
+export function createModelPair(overrides: ModelOverrides = {}): ModelPair {
   let primary: LanguageModel | undefined;
   let fallback: LanguageModel | undefined;
   return {
-    primary: () => (primary ??= overrides.model ?? chatModel(env)),
+    primary: () => (primary ??= overrides.model ?? chatModel()),
     fallback: () =>
       (fallback ??=
-        overrides.fallbackModel ?? overrides.model ?? fallbackChatModel(env)),
+        overrides.fallbackModel ?? overrides.model ?? fallbackChatModel()),
     primaryId: () => CHAT_MODEL_ID,
     fallbackId: () => CHAT_FALLBACK_MODEL_ID
   };

@@ -4,6 +4,7 @@ import type {
   RequestContext
 } from "@a2a-js/sdk/server";
 import type { PushNotificationConfig } from "@a2a-js/sdk";
+import { env } from "cloudflare:workers";
 import type { GatewayIdentity } from "./verify";
 import type { NotifyTaskParams } from "@/workflows/notify-task";
 import { getAgent } from "@/proactive-agent";
@@ -40,7 +41,6 @@ export function workflowIdForMessage(messageId: string): string {
 export class A2AExecutor implements AgentExecutor {
   constructor(
     private readonly identity: GatewayIdentity,
-    private readonly env: Env,
     private readonly cfg: ExecutorConfig
   ) {}
 
@@ -60,7 +60,7 @@ export class A2AExecutor implements AgentExecutor {
 
     // `identity.key` is guaranteed non-null: the Worker rejects a keyless identity
     // (400) before constructing this executor.
-    const stub = getAgent(this.env, this.identity);
+    const stub = getAgent(env, this.identity);
 
     // Record (or reuse) the submitted Task, then start the durable workflow. Both
     // are idempotent, so a dispatch retry heals a crash between the two.
@@ -91,7 +91,7 @@ export class A2AExecutor implements AgentExecutor {
     params: NotifyTaskParams
   ): Promise<void> {
     try {
-      await this.env.NOTIFY_WORKFLOW.create({
+      await env.NOTIFY_WORKFLOW.create({
         id: workflowIdForMessage(messageId),
         params
       });
@@ -109,7 +109,7 @@ export class A2AExecutor implements AgentExecutor {
     taskId: string,
     eventBus: ExecutionEventBus
   ): Promise<void> => {
-    const task = await getAgent(this.env, this.identity).cancelTask(taskId);
+    const task = await getAgent(env, this.identity).cancelTask(taskId);
     if (task) eventBus.publish(task);
     eventBus.finished();
   };

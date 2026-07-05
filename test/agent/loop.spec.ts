@@ -7,9 +7,6 @@ import type { SessionLike } from "@/agent/session";
 import { sessionText } from "@/agent/history";
 import { mockModel } from "./mock-model";
 
-// The model is always injected via overrides, so `env.AI` is never touched.
-const ENV = {} as Env;
-
 /** The verified-caller suffix a turn appends to the Session's soul block. */
 const CALLER_SUFFIX = "\n\nCalling agent instance: Ada.";
 
@@ -50,7 +47,7 @@ function run(
     text,
     systemSuffix: CALLER_SUFFIX,
     tools: extraTools,
-    models: createModelPair(ENV, models),
+    models: createModelPair(models),
     unexpectedReply: UNEXPECTED_REPLY
   }).then((reply) => ({ reply, session }));
 }

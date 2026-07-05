@@ -13,8 +13,8 @@ import { createCompactFunction } from "agents/experimental/memory/utils";
 
 /**
  * The SQLite-backed host the Sessions API needs — satisfied by the Agents SDK
- * `Agent` (`this.sql`). `env` is passed to executors separately because it's
- * `protected` on `Agent` (only the agent subclass itself can read it).
+ * `Agent` (`this.sql`). `env` is `protected` on `Agent` so only the subclass
+ * itself can read it.
  */
 export interface SessionHost {
   sql<T = Record<string, string | number | boolean | null>>(
