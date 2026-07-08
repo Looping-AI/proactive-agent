@@ -1,7 +1,6 @@
-import { AGENT_CARD_PATH } from "@a2a-js/sdk";
+import { AGENT_CARD_PATH, type PushNotificationConfig } from "@a2a-js/sdk";
 import {
   DefaultRequestHandler,
-  InMemoryTaskStore,
   JsonRpcTransportHandler
 } from "@a2a-js/sdk/server";
 import {
@@ -17,8 +16,10 @@ import {
   type GatewayIdentity
 } from "./a2a/verify";
 import { A2AExecutor } from "./a2a/executor";
+import { DurableTaskStore } from "./a2a/task-store";
 
 export { ProactiveAgent } from "./proactive-agent";
+export { NotifyTaskWorkflow } from "./workflows/notify-task";
 
 /**
  * Reference remote and proactive A2A agent for looping-gateway.
@@ -101,10 +102,39 @@ export default {
       }
 
       const body = await request.json();
+      const rpcBody = body as {
+        id?: string | number | null;
+        method?: string;
+        params?: {
+          configuration?: { pushNotificationConfig?: PushNotificationConfig };
+        };
+      };
+
+      // This agent is async-only: a `message/send` must carry a
+      // `pushNotificationConfig` (webhook + token) so the reply can be delivered
+      // out of band. Reject a synchronous send up front — there is nowhere to
+      // notify otherwise. (`tasks/*` and discovery methods carry no config.)
+      const pushConfig = rpcBody.params?.configuration?.pushNotificationConfig;
+      if (rpcBody.method === "message/send" && !pushConfig?.url) {
+        return Response.json({
+          jsonrpc: "2.0",
+          id: rpcBody.id ?? null,
+          error: {
+            code: -32602,
+            message:
+              "pushNotificationConfig with a url is required: this agent " +
+              "replies asynchronously via push notification (A2A §13.2)"
+          }
+        });
+      }
+
       const handler = new DefaultRequestHandler(
         buildBaseCard(origin),
-        new InMemoryTaskStore(),
-        new A2AExecutor(identity, env)
+        new DurableTaskStore(identity, env),
+        new A2AExecutor(identity, env, {
+          pushConfig,
+          jku: `${origin}${JWKS_PATH}`
+        })
       );
       const rpc = new JsonRpcTransportHandler(handler);
       const result = await rpc.handle(body);

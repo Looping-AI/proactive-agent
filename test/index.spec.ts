@@ -1,54 +1,51 @@
 import { describe, it, expect } from "vitest";
+import { env } from "cloudflare:workers";
 import worker from "@/index";
+import type { Task } from "@a2a-js/sdk";
 import type { ProactiveAgent } from "@/proactive-agent";
+import type { NotifyTaskParams } from "@/workflows/notify-task";
+import { workflowIdForMessage } from "@/a2a/executor";
+import { buildSubmittedTask } from "@/a2a/notify";
 import type { GatewayIdentity } from "@/a2a/verify";
-import {
-  makeGatewayToken,
-  TEST_AGENT_PRIVATE_JWK,
-  GATEWAY_ORIGIN,
-  AGENT_ORIGIN
-} from "./fixtures";
+import { GATEWAY_ORIGIN, AGENT_ORIGIN } from "./fixtures";
+import { makeGatewayToken } from "./helpers/auth";
 
-// Auth/card/jwks paths return before touching the DO or AI, so a stub `env`
-// (no real `AI` binding, no DO) is enough for them; the DO-routed happy path
-// injects a fake `ProactiveAgent` namespace (below) whose `converse()` captures the
-// call. The real DO's Session/SQLite behavior is covered by test/do/**.
-const TEST_ENV: Env = {
-  A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
-  GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN]),
-  AI: undefined as unknown as Ai,
-  ProactiveAgent:
-    undefined as unknown as DurableObjectNamespace<ProactiveAgent>,
-  VECTORIZE: undefined as unknown as VectorizeIndex
-};
+const PUSH_URL = `${GATEWAY_ORIGIN}/a2a/notifications`;
+const PUSH_TOKEN = "push-token-abc";
 
-/** Captures what the Worker's executor called on the DO (instance key + `converse` args). */
-interface DoCapture {
+/** Captures what the Worker's executor did: the DO key, `beginTask` args, workflow create. */
+interface Capture {
   name?: string;
-  text?: string;
-  identity?: GatewayIdentity;
+  beginTask?: { messageId: string; taskId: string; contextId: string };
+  workflow?: { id?: string; params?: NotifyTaskParams };
 }
 
 /**
- * A fake `ProactiveAgent` namespace: records the `idFromName` key and the
- * `converse(text, identity)` args, and returns `reply()` — so we can assert the
- * Worker's routing (DO keyed by `identity.key`, forwarded text + identity)
- * without a real DO. `reply` is synchronous and may throw to exercise the
- * executor's RPC-failure path — a sync throw rejects the single `converse`
- * promise directly, which workerd's tracker handles cleanly (a nested rejected
- * promise would be spuriously flagged as an unhandled rejection).
+ * A fake `ProactiveAgent` namespace: records the `idFromName` key and answers the
+ * task-state RPC methods the accept path + SDK touch (`beginTask` returns a
+ * submitted Task; `getTask`/`saveTask` back the durable store) — so we can assert
+ * the Worker's accept behavior without a real DO.
  */
 function fakeProactiveAgent(
-  capture: DoCapture,
-  reply: (text: string, identity: GatewayIdentity) => string = () =>
-    "ok from DO"
+  capture: Capture
 ): DurableObjectNamespace<ProactiveAgent> {
+  const tasks = new Map<string, Task>();
   const stub = {
-    converse: async (text: string, identity: GatewayIdentity) => {
-      capture.text = text;
-      capture.identity = identity;
-      return reply(text, identity);
-    }
+    beginTask: async (input: {
+      messageId: string;
+      taskId: string;
+      contextId: string;
+    }) => {
+      capture.beginTask = input;
+      const task = buildSubmittedTask(input.taskId, input.contextId);
+      tasks.set(task.id, task);
+      return task;
+    },
+    getTask: async (id: string) => tasks.get(id) ?? null,
+    saveTask: async (task: Task) => {
+      tasks.set(task.id, task);
+    },
+    cancelTask: async () => null
   };
   return {
     idFromName: (name: string) => {
@@ -59,21 +56,37 @@ function fakeProactiveAgent(
   } as unknown as DurableObjectNamespace<ProactiveAgent>;
 }
 
+/** A fake `NOTIFY_WORKFLOW` binding capturing the single `create` call. */
+function fakeWorkflow(capture: Capture): Env["NOTIFY_WORKFLOW"] {
+  return {
+    create: async (opts?: { id?: string; params?: NotifyTaskParams }) => {
+      capture.workflow = { id: opts?.id, params: opts?.params };
+      return {} as WorkflowInstance;
+    },
+    get: async () => ({}) as WorkflowInstance,
+    createBatch: async () => []
+  } as unknown as Env["NOTIFY_WORKFLOW"];
+}
+
 // The worker's fetch handler only takes (request, env) — it never uses ctx.
 async function req(
   method: string,
   path: string,
   init?: RequestInit,
-  env: Env = TEST_ENV
+  workerEnv: Env = env
 ) {
   return worker.fetch(
     new Request(`${AGENT_ORIGIN}${path}`, { method, ...init }),
-    env
+    workerEnv
   );
 }
 
-/** A `message/send` JSON-RPC body carrying `text`. */
-function sendBody(text: string, method = "message/send") {
+/** A `message/send` JSON-RPC body carrying `text` (with or without a push config). */
+function sendBody(
+  text: string,
+  opts: { push?: boolean; method?: string } = {}
+) {
+  const { push = true, method = "message/send" } = opts;
   return {
     jsonrpc: "2.0",
     id: "1",
@@ -83,8 +96,16 @@ function sendBody(text: string, method = "message/send") {
         messageId: "msg-test-1",
         role: "user",
         kind: "message",
-        parts: [{ kind: "text", text }]
-      }
+        parts: [{ kind: "text", text }],
+        contextId: "ctx-1"
+      },
+      ...(push
+        ? {
+            configuration: {
+              pushNotificationConfig: { url: PUSH_URL, token: PUSH_TOKEN }
+            }
+          }
+        : {})
     }
   };
 }
@@ -179,7 +200,7 @@ describe("POST /a2a", () => {
           authorization: `Bearer ${token}`
         }
       },
-      { ...TEST_ENV, GATEWAY_ORIGINS: "[]" }
+      { ...env, GATEWAY_ORIGINS: "[]" }
     );
     expect(res.status).toBe(401);
   });
@@ -188,73 +209,68 @@ describe("POST /a2a", () => {
     const res = await postRpc(
       {},
       { name: "NoKey", kind: "custom", workspaceId: 1 },
-      TEST_ENV
+      env
     );
     expect(res.status).toBe(400);
   });
 
-  it("routes an authenticated RPC into the caller's DO, forwarding the message text and verified identity", async () => {
+  it("accepts a message/send with a pushNotificationConfig: records a submitted Task and starts the notify workflow", async () => {
     const identity = {
       key: "custom:1:ada",
       name: "Ada",
       kind: "custom",
       workspaceId: 1
     };
-    // Nothing reads `message.metadata` anymore, so there is no spoofing surface
-    // to defend here — the verified identity is passed as a native RPC arg.
-    const capture: DoCapture = {};
+    const capture: Capture = {};
     const res = await postRpc(sendBody("Hello from test!"), identity, {
-      ...TEST_ENV,
-      ProactiveAgent: fakeProactiveAgent(capture)
+      ...env,
+      ProactiveAgent: fakeProactiveAgent(capture),
+      NOTIFY_WORKFLOW: fakeWorkflow(capture)
     });
 
     expect(res.status).toBe(200);
     const body = await res.json<{
-      result: { role: string; parts: { text: string }[] };
+      result: { kind: string; id: string; status: { state: string } };
     }>();
-    expect(body.result.role).toBe("agent");
-    // The DO's returned text is published as the single agent reply.
-    expect(body.result.parts[0].text).toBe("ok from DO");
+    // The accept ack is a *submitted Task*, not a Message.
+    expect(body.result.kind).toBe("task");
+    expect(body.result.status.state).toBe("submitted");
+    expect(body.result.id.length).toBeGreaterThan(0);
 
-    // The DO instance is keyed by the verified identity.key.
+    // DO keyed by the verified identity.key; beginTask carries the message + context.
     expect(capture.name).toBe("custom:1:ada");
-    // The Worker forwarded the message text and the *verified* identity as RPC args.
-    expect(capture.text).toBe("Hello from test!");
-    expect(capture.identity).toMatchObject({
-      key: "custom:1:ada",
-      name: "Ada"
-    });
+    expect(capture.beginTask?.messageId).toBe("msg-test-1");
+    expect(capture.beginTask?.contextId).toBe("ctx-1");
+
+    // The workflow is started with a deterministic id and the turn params.
+    expect(capture.workflow?.id).toBe(workflowIdForMessage("msg-test-1"));
+    expect(capture.workflow?.params?.text).toBe("Hello from test!");
+    expect(capture.workflow?.params?.pushUrl).toBe(PUSH_URL);
+    expect(capture.workflow?.params?.pushToken).toBe(PUSH_TOKEN);
+    expect(capture.workflow?.params?.identity.key).toBe("custom:1:ada");
+    expect(capture.workflow?.params?.jku).toBe(
+      `${AGENT_ORIGIN}/.well-known/jwks.json`
+    );
   });
 
-  it("still returns a well-formed 200 reply when the DO call fails", async () => {
-    const capture: DoCapture = {};
+  it("rejects a message/send without a pushNotificationConfig (async-only)", async () => {
     const res = await postRpc(
-      sendBody("hi"),
+      sendBody("hi", { push: false }),
       { key: "custom:1:ada" },
-      {
-        ...TEST_ENV,
-        ProactiveAgent: fakeProactiveAgent(capture, () => {
-          throw new Error("DO unreachable");
-        })
-      }
+      env
     );
-
     expect(res.status).toBe(200);
-    const body = await res.json<{
-      result: { role: string; parts: { text: string }[] };
-    }>();
-    expect(body.result.role).toBe("agent");
-    expect(body.result.parts[0].text.length).toBeGreaterThan(0);
+    const body = await res.json<{ error?: { code: number } }>();
+    expect(body.error?.code).toBe(-32602);
   });
 
   it("rejects a streaming method with an unsupported-operation JSON-RPC error", async () => {
     // The card advertises `streaming: false`, so the a2a-js handler rejects
-    // `message/stream` up front with a JSON-RPC error (HTTP 200, code -32004) —
-    // the executor / DO are never reached.
+    // `message/stream` up front with a JSON-RPC error (HTTP 200, code -32004).
     const res = await postRpc(
-      sendBody("hi", "message/stream"),
+      sendBody("hi", { method: "message/stream" }),
       { key: "custom:1:ada" },
-      TEST_ENV
+      env
     );
     expect(res.status).toBe(200);
     const body = await res.json<{ error?: { code: number } }>();

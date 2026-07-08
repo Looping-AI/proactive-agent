@@ -27,7 +27,9 @@ export interface CardSigningConfig {
  * Build the (unsigned) AgentCard. `url` is the JSON-RPC endpoint the gateway
  * will POST to; it must be reachable at this worker's own origin. The card
  * advertises the gateway's auth scheme (HTTP Bearer JWT) so the contract is
- * self-describing, and `streaming:false` (single-reply MVP, like the gateway).
+ * self-describing. `streaming:false` (we don't stream); `pushNotifications:true`
+ * — replies are delivered asynchronously to the gateway webhook (see the manifest
+ * and `src/a2a/notify.ts`).
  */
 export function buildBaseCard(origin: string): SignedAgentCard {
   return {

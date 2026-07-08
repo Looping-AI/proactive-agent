@@ -1,5 +1,8 @@
-import { Agent } from "agents";
+import { Agent, type Schedule } from "agents";
+import type { Task } from "@a2a-js/sdk";
 import type { GatewayIdentity } from "@/a2a/verify";
+import type { PlainTask } from "@/a2a/task";
+import { AgentDB } from "@/db/db";
 import { createModelPair, embedTexts, type ModelPair } from "@/agent/model";
 import { callerContext, soulPrompt } from "@/agent/prompt";
 import { buildTools } from "@/agent/tools";
@@ -36,6 +39,30 @@ const UNEXPECTED_REPLY =
 export class ProactiveAgent extends Agent<Env> {
   private session?: SessionLike;
   private models?: ModelPair;
+  private _db?: AgentDB;
+
+  /** The agent's database (drizzle + migrations), built once per DO instance. */
+  private get db(): AgentDB {
+    return (this._db ??= new AgentDB(this.ctx.storage));
+  }
+
+  async onStart(): Promise<void> {
+    // Force construction so migrations run once on every hibernation wake-up.
+    void this.db;
+    // Register the weekly cleanup cron once per DO instance (idempotent guard).
+    const existing = await this.listSchedules({ type: "cron" });
+    if (!existing.some((s) => s.callback === "cleanupOldTasks")) {
+      await this.schedule("0 1 * * 0", "cleanupOldTasks", {});
+    }
+  }
+
+  /** Cron handler: delete notify_tasks rows older than 30 days. Runs Sunday 01:00 UTC. */
+  async cleanupOldTasks(
+    _payload: Record<string, never>,
+    _schedule: Schedule
+  ): Promise<void> {
+    this.db.tasks.cleanup();
+  }
 
   private modelPair(): ModelPair {
     return (this.models ??= createModelPair(this.env));
@@ -98,6 +125,59 @@ export class ProactiveAgent extends Agent<Env> {
       unexpectedReply: UNEXPECTED_REPLY
     });
   }
+
+  // --- Async task state (accept + notify) ---------------------------------
+  //
+  // Thin RPC surface delegating to AgentDB's `tasks` table (src/db/db.ts).
+  // Native RPC methods — the DO is never a network-reachable server. The
+  // workflow, which cannot touch this SQLite directly, calls these via DO RPC.
+  //
+  // The Task-returning methods return {@link PlainTask} (the SDK `Task` minus its
+  // `unknown`-bearing extension `metadata`); returning the raw SDK `Task` would
+  // collapse the generated DO-stub types to `never`. See {@link file://../a2a/task.ts}.
+
+  async beginTask(input: {
+    messageId: string;
+    taskId: string;
+    contextId: string;
+  }): Promise<PlainTask> {
+    return this.db.tasks.begin(input);
+  }
+
+  async getTask(taskId: string): Promise<PlainTask | null> {
+    return this.db.tasks.get(taskId);
+  }
+
+  async saveTask(task: Task): Promise<void> {
+    this.db.tasks.save(task);
+  }
+
+  async markWorking(taskId: string): Promise<void> {
+    this.db.tasks.markWorking(taskId);
+  }
+
+  async completeTask(_taskId: string, task: Task): Promise<void> {
+    this.db.tasks.complete(task);
+  }
+
+  async cancelTask(taskId: string): Promise<PlainTask | null> {
+    return this.db.tasks.cancel(taskId);
+  }
+}
+
+/**
+ * Resolve the per-caller agent DO stub, keyed by the verified `identity.key`. Pure
+ * routing — the DO's methods are honestly typed now that its `Task` returns are
+ * {@link PlainTask}, so callers reach the agent directly with no cast.
+ */
+export function getAgent(
+  env: Env,
+  identity: GatewayIdentity
+): DurableObjectStub<ProactiveAgent> {
+  if (!identity.key) {
+    throw new Error("identity.key is required to route to the agent DO");
+  }
+  return env.ProactiveAgent.get(env.ProactiveAgent.idFromName(identity.key));
 }
 
 /**
