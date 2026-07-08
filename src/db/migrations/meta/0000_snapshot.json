@@ -55,6 +55,11 @@
           "name": "notify_tasks_message_id_unique",
           "columns": ["message_id"],
           "isUnique": true
+        },
+        "idx_notify_tasks_created_at": {
+          "name": "idx_notify_tasks_created_at",
+          "columns": ["created_at"],
+          "isUnique": false
         }
       },
       "foreignKeys": {},
