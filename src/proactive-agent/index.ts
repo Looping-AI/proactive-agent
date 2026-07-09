@@ -176,10 +176,13 @@ export class ProactiveAgent extends Agent<Env> {
     let jwt: string | undefined;
     return async (text: string, stepIndex: number) => {
       try {
-        jwt ??= await signCallbackJwt(parsePrivateJwk(env.A2A_SIGNING_KEY), {
-          jku: push.jku,
-          aud: push.pushUrl
-        });
+        jwt ??= await signCallbackJwt(
+          parsePrivateJwk(this.env.A2A_SIGNING_KEY),
+          {
+            jku: push.jku,
+            aud: push.pushUrl
+          }
+        );
         const task = buildWorkingTask(
           push.taskId,
           push.contextId,
