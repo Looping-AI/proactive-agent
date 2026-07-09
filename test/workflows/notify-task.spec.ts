@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { importJWK, jwtVerify } from "jose";
+import { env } from "cloudflare:workers";
 import type { WorkflowStep } from "cloudflare:workers";
 import type { Task } from "@a2a-js/sdk";
+import type { ProactiveAgent } from "@/proactive-agent";
 import { runNotifyTask, type NotifyTaskParams } from "@/workflows/notify-task";
 import {
   TEST_AGENT_PRIVATE_JWK,
@@ -18,33 +20,6 @@ interface StubCapture {
   completed?: { task: Task };
   reply: string;
   currentState?: Task["status"]["state"];
-}
-
-/** Minimal fake env exposing just the DO RPC surface the workflow calls. */
-function fakeEnv(cap: StubCapture): Env {
-  const stub = {
-    markWorking: async (id: string) => {
-      cap.working = id;
-    },
-    converse: async (text: string, identity: unknown) => {
-      cap.converse = { text, identity };
-      return cap.reply;
-    },
-    getTask: async (): Promise<Task | null> =>
-      cap.currentState
-        ? ({ status: { state: cap.currentState } } as unknown as Task)
-        : null,
-    completeTask: async (task: Task) => {
-      cap.completed = { task };
-    }
-  };
-  return {
-    A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
-    ProactiveAgent: {
-      idFromName: (name: string) => ({ name }),
-      get: () => stub
-    }
-  } as unknown as Env;
 }
 
 /** A `step` that just runs each callback inline (no durability/retry in tests). */
@@ -73,15 +48,39 @@ async function agentPublicKey() {
   return importJWK(pub, "EdDSA");
 }
 
-function runWorkflow(env: Env, p: NotifyTaskParams) {
-  return runNotifyTask(env, p, inlineStep);
+/** Spy on the global ProactiveAgent namespace to return a fake stub. */
+function mockAgent(cap: StubCapture) {
+  const stub = {
+    markWorking: vi.fn(async (id: string) => {
+      cap.working = id;
+    }),
+    converse: vi.fn(async (text: string, identity: unknown) => {
+      cap.converse = { text, identity };
+      return cap.reply;
+    }),
+    getTask: vi.fn(async (): Promise<Task | null> =>
+      cap.currentState
+        ? ({ status: { state: cap.currentState } } as unknown as Task)
+        : null
+    ),
+    completeTask: vi.fn(async (task: Task) => {
+      cap.completed = { task };
+    })
+  } as unknown as DurableObjectStub<ProactiveAgent>;
+  vi.spyOn(env.ProactiveAgent, "get").mockReturnValue(stub);
+  return stub;
 }
 
-describe("NotifyTaskWorkflow", () => {
-  afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
+describe("NotifyTaskWorkflow", () => {
   it("generates the reply and POSTs a signed completed-Task callback to the gateway", async () => {
     const cap: StubCapture = { reply: "the answer" };
+    mockAgent(cap);
+
     const captured: { url?: string; init?: RequestInit } = {};
     vi.stubGlobal(
       "fetch",
@@ -92,7 +91,7 @@ describe("NotifyTaskWorkflow", () => {
       })
     );
 
-    await runWorkflow(fakeEnv(cap), params());
+    await runNotifyTask(params(), inlineStep);
 
     // Drove the DO: working → converse(text, identity) → completeTask.
     expect(cap.working).toBe("task-1");
@@ -127,10 +126,11 @@ describe("NotifyTaskWorkflow", () => {
 
   it("skips the callback when the task was canceled before completion", async () => {
     const cap: StubCapture = { reply: "the answer", currentState: "canceled" };
+    mockAgent(cap);
     const fetchSpy = vi.fn(async () => new Response("ok", { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
 
-    await runWorkflow(fakeEnv(cap), params());
+    await runNotifyTask(params(), inlineStep);
 
     expect(cap.completed).toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { WorkflowEntrypoint } from "cloudflare:workers";
+import { WorkflowEntrypoint, env } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import type { GatewayIdentity } from "@/a2a/verify";
 import { parsePrivateJwk } from "@/a2a/card";
@@ -54,7 +54,7 @@ export class NotifyTaskWorkflow extends WorkflowEntrypoint<
     event: Readonly<WorkflowEvent<NotifyTaskParams>>,
     step: WorkflowStep
   ): Promise<void> {
-    await runNotifyTask(this.env, event.payload, step);
+    await runNotifyTask(event.payload, step);
   }
 }
 
@@ -65,11 +65,10 @@ export class NotifyTaskWorkflow extends WorkflowEntrypoint<
  * durable and idempotent.
  */
 export async function runNotifyTask(
-  env: Env,
   p: NotifyTaskParams,
   step: WorkflowStep
 ): Promise<void> {
-  const stub = getAgent(env, p.identity);
+  const stub = getAgent(p.identity);
 
   await step.do("working", async () => {
     await stub.markWorking(p.taskId);

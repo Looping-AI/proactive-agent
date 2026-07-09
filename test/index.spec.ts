@@ -1,84 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import worker from "@/index";
-import type { Task } from "@a2a-js/sdk";
 import type { ProactiveAgent } from "@/proactive-agent";
-import type { NotifyTaskParams } from "@/workflows/notify-task";
-import { workflowIdForMessage } from "@/a2a/executor";
-import { buildSubmittedTask } from "@/a2a/notify";
 import type { GatewayIdentity } from "@/a2a/verify";
-import { GATEWAY_ORIGIN, AGENT_ORIGIN, TEST_AGENT_PRIVATE_JWK } from "./fixtures";
+import {
+  GATEWAY_ORIGIN,
+  AGENT_ORIGIN,
+  TEST_AGENT_PRIVATE_JWK
+} from "./fixtures";
 import { makeGatewayToken } from "./helpers/auth";
 
 const PUSH_URL = `${GATEWAY_ORIGIN}/a2a/notifications`;
 const PUSH_TOKEN = "push-token-abc";
-
-/** Captures what the Worker's executor did: the DO key, `beginTask` args, workflow create. */
-interface Capture {
-  name?: string;
-  beginTask?: { messageId: string; taskId: string; contextId: string };
-  workflow?: { id?: string; params?: NotifyTaskParams };
-}
-
-/**
- * A fake `ProactiveAgent` namespace for tests that inject env into the worker handler
- * (only affects DurableTaskStore; the executor uses global env from cloudflare:workers).
- */
-function fakeProactiveAgent(
-  capture: Capture,
-  seedTasks: Map<string, Task> = new Map()
-): DurableObjectNamespace<ProactiveAgent> {
-  const tasks = new Map<string, Task>(seedTasks);
-  const stub = {
-    beginTask: async (input: {
-      messageId: string;
-      taskId: string;
-      contextId: string;
-    }) => {
-      capture.beginTask = input;
-      const task = buildSubmittedTask(input.taskId, input.contextId);
-      tasks.set(task.id, task);
-      return task;
-    },
-    getTask: async (id: string) => tasks.get(id) ?? null,
-    saveTask: async (task: Task) => {
-      tasks.set(task.id, task);
-    },
-    cancelTask: async (taskId: string) => {
-      const task = tasks.get(taskId);
-      if (!task) return null;
-      const canceled = {
-        ...task,
-        status: {
-          ...task.status,
-          state: "canceled" as const,
-          timestamp: new Date().toISOString()
-        }
-      };
-      tasks.set(taskId, canceled);
-      return canceled;
-    }
-  };
-  return {
-    idFromName: (name: string) => {
-      capture.name = name;
-      return { name } as unknown as DurableObjectId;
-    },
-    get: () => stub as unknown as DurableObjectStub<ProactiveAgent>
-  } as unknown as DurableObjectNamespace<ProactiveAgent>;
-}
-
-/** A fake `NOTIFY_WORKFLOW` binding capturing the single `create` call. */
-function fakeWorkflow(capture: Capture): Env["NOTIFY_WORKFLOW"] {
-  return {
-    create: async (opts?: { id?: string; params?: NotifyTaskParams }) => {
-      capture.workflow = { id: opts?.id, params: opts?.params };
-      return {} as WorkflowInstance;
-    },
-    get: async () => ({}) as WorkflowInstance,
-    createBatch: async () => []
-  } as unknown as Env["NOTIFY_WORKFLOW"];
-}
 
 // Stub env for tests that only need config vars (auth/card/jwks paths).
 // The executor uses global env (cloudflare:workers) for ProactiveAgent routing,
@@ -328,10 +261,9 @@ describe("POST /a2a", () => {
   });
 
   it("tasks/cancel — returns taskNotFound error for an unknown taskId", async () => {
-    const res = await postRpc(
-      cancelBody("no-such-task"),
-      { key: "custom:1:ada" }
-    );
+    const res = await postRpc(cancelBody("no-such-task"), {
+      key: "custom:1:ada"
+    });
     expect(res.status).toBe(200);
     const body = await res.json<{
       error?: { code: number; message: string };

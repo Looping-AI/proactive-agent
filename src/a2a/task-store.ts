@@ -16,18 +16,13 @@ import { getAgent } from "@/proactive-agent";
  * of truth.
  */
 export class DurableTaskStore implements TaskStore {
-  constructor(
-    private readonly identity: GatewayIdentity,
-    private readonly env: Env
-  ) {}
+  constructor(private readonly identity: GatewayIdentity) {}
 
   async load(taskId: string): Promise<Task | undefined> {
-    return (
-      (await getAgent(this.env, this.identity).getTask(taskId)) ?? undefined
-    );
+    return (await getAgent(this.identity).getTask(taskId)) ?? undefined;
   }
 
   async save(task: Task): Promise<void> {
-    await getAgent(this.env, this.identity).saveTask(task);
+    await getAgent(this.identity).saveTask(task);
   }
 }

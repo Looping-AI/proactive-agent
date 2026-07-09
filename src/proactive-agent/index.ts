@@ -1,4 +1,5 @@
 import { Agent, type Schedule } from "agents";
+import { env } from "cloudflare:workers";
 import type { Task } from "@a2a-js/sdk";
 import type { GatewayIdentity } from "@/a2a/verify";
 import type { PlainTask } from "@/a2a/task";
@@ -170,7 +171,6 @@ export class ProactiveAgent extends Agent<Env> {
  * {@link PlainTask}, so callers reach the agent directly with no cast.
  */
 export function getAgent(
-  env: Env,
   identity: GatewayIdentity
 ): DurableObjectStub<ProactiveAgent> {
   if (!identity.key) {

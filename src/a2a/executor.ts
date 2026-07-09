@@ -60,7 +60,7 @@ export class A2AExecutor implements AgentExecutor {
 
     // `identity.key` is guaranteed non-null: the Worker rejects a keyless identity
     // (400) before constructing this executor.
-    const stub = getAgent(env, this.identity);
+    const stub = getAgent(this.identity);
 
     // Record (or reuse) the submitted Task, then start the durable workflow. Both
     // are idempotent, so a dispatch retry heals a crash between the two.
@@ -109,7 +109,7 @@ export class A2AExecutor implements AgentExecutor {
     taskId: string,
     eventBus: ExecutionEventBus
   ): Promise<void> => {
-    const task = await getAgent(env, this.identity).cancelTask(taskId);
+    const task = await getAgent(this.identity).cancelTask(taskId);
     if (task) eventBus.publish(task);
     eventBus.finished();
   };

@@ -143,7 +143,7 @@ export default {
 
       const handler = new DefaultRequestHandler(
         buildBaseCard(origin),
-        new DurableTaskStore(identity, env),
+        new DurableTaskStore(identity),
         new A2AExecutor(identity, {
           pushConfig,
           jku: `${origin}${JWKS_PATH}`
