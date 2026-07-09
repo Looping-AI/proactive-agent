@@ -1,4 +1,4 @@
-import { WorkflowEntrypoint } from "cloudflare:workers";
+import { WorkflowEntrypoint, env } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import type { GatewayIdentity } from "@/a2a/verify";
 import { parsePrivateJwk } from "@/a2a/card";
@@ -54,22 +54,22 @@ export class NotifyTaskWorkflow extends WorkflowEntrypoint<
     event: Readonly<WorkflowEvent<NotifyTaskParams>>,
     step: WorkflowStep
   ): Promise<void> {
-    await runNotifyTask(this.env, event.payload, step);
+    await runNotifyTask(event.payload, step);
   }
 }
 
 /**
  * The orchestration itself, split from the `WorkflowEntrypoint` wiring so it can
- * be driven with a fake `step` + env in tests (workerd forbids constructing a
- * `WorkflowEntrypoint` outside the runtime). Steps are named so retries are
- * durable and idempotent.
+ * be driven with a fake `step` in tests (workerd forbids constructing a
+ * `WorkflowEntrypoint` outside the runtime). Reads env via the module-level
+ * `cloudflare:workers` import rather than a parameter. Steps are named so
+ * retries are durable and idempotent.
  */
 export async function runNotifyTask(
-  env: Env,
   p: NotifyTaskParams,
   step: WorkflowStep
 ): Promise<void> {
-  const stub = getAgent(env, p.identity);
+  const stub = getAgent(p.identity);
 
   await step.do("working", async () => {
     await stub.markWorking(p.taskId);

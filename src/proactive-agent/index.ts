@@ -1,4 +1,5 @@
 import { Agent, type Schedule } from "agents";
+import { env } from "cloudflare:workers";
 import type { Task } from "@a2a-js/sdk";
 import type { GatewayIdentity } from "@/a2a/verify";
 import type { PlainTask } from "@/a2a/task";
@@ -66,7 +67,7 @@ export class ProactiveAgent extends Agent<Env> {
   }
 
   private modelPair(): ModelPair {
-    return (this.models ??= createModelPair(this.env));
+    return (this.models ??= createModelPair());
   }
 
   /**
@@ -90,9 +91,7 @@ export class ProactiveAgent extends Agent<Env> {
         // this instance's Vectorize namespace. Best-effort — the wrapper
         // swallows failures so compaction still shortens history.
         onArchive: (messages) =>
-          archiveMessages(this.env.VECTORIZE, namespace, messages, (texts) =>
-            embedTexts(this.env, texts)
-          )
+          archiveMessages(this.env.VECTORIZE, namespace, messages, embedTexts)
       }
     ));
   }
@@ -119,7 +118,7 @@ export class ProactiveAgent extends Agent<Env> {
       tools: buildTools(identity, {
         index: this.env.VECTORIZE,
         namespace: recallNamespace(identity),
-        embed: (texts) => embedTexts(this.env, texts),
+        embed: embedTexts,
         hasArchive
       }),
       models: this.modelPair(),
@@ -172,7 +171,6 @@ export class ProactiveAgent extends Agent<Env> {
  * {@link PlainTask}, so callers reach the agent directly with no cast.
  */
 export function getAgent(
-  env: Env,
   identity: GatewayIdentity
 ): DurableObjectStub<ProactiveAgent> {
   if (!identity.key) {
