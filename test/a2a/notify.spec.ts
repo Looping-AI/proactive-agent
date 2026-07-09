@@ -4,6 +4,7 @@ import type { Task } from "@a2a-js/sdk";
 import {
   buildSubmittedTask,
   buildCompletedTask,
+  buildWorkingTask,
   signCallbackJwt,
   postNotification,
   NOTIFICATION_TOKEN_HEADER
@@ -42,6 +43,32 @@ describe("buildCompletedTask", () => {
       .join("");
     expect(text).toBe("the answer");
     expect(task.status.message?.role).toBe("agent");
+  });
+
+  it("uses a deterministic ${taskId}:final messageId (stable across notify-step retries)", () => {
+    const a = buildCompletedTask("task-1", "ctx-1", "the answer");
+    const b = buildCompletedTask("task-1", "ctx-1", "the answer");
+    expect(a.status.message?.messageId).toBe("task-1:final");
+    expect(b.status.message?.messageId).toBe("task-1:final");
+  });
+});
+
+describe("buildWorkingTask", () => {
+  it("is a working Task carrying the given intermediate text + messageId", () => {
+    const task = buildWorkingTask("task-1", "ctx-1", "progress…", 0);
+    expect(task.status.state).toBe("working");
+    expect(task.id).toBe("task-1");
+    expect(task.contextId).toBe("ctx-1");
+    expect(task.status.message?.role).toBe("agent");
+    expect(task.status.message?.messageId).toBe("task-1:0");
+    const parts = task.status.message?.parts ?? [];
+    const text = parts
+      .filter(
+        (p): p is Extract<typeof p, { kind: "text" }> => p.kind === "text"
+      )
+      .map((p) => p.text)
+      .join("");
+    expect(text).toBe("progress…");
   });
 });
 

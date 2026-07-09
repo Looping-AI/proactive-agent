@@ -121,6 +121,49 @@ describe("runTurn — happy path", () => {
     });
     expect(reply).toBe("I echoed: ping");
   });
+
+  it("streams intermediate content (text on a tool-call step) via onContent, not the final reply", async () => {
+    const streamed: Array<{ text: string; index: number }> = [];
+    const reply = await runTurn({
+      session: new FakeSession(),
+      text: "hello",
+      systemSuffix: CALLER_SUFFIX,
+      tools: {},
+      models: createModelPair({
+        model: mockModel(
+          {
+            text: "thinking out loud",
+            toolCall: { toolName: "echo", input: { text: "ping" } }
+          },
+          { text: "final answer" }
+        )
+      }),
+      unexpectedReply: UNEXPECTED_REPLY,
+      onContent: (text, index) => {
+        streamed.push({ text, index });
+      }
+    });
+    expect(reply).toBe("final answer");
+    // The intermediate content streamed once (step 0); the final reply did not.
+    expect(streamed).toEqual([{ text: "thinking out loud", index: 0 }]);
+  });
+
+  it("does not stream when the turn is a single content reply (no tool call)", async () => {
+    const streamed: string[] = [];
+    const reply = await runTurn({
+      session: new FakeSession(),
+      text: "hello",
+      systemSuffix: CALLER_SUFFIX,
+      tools: {},
+      models: createModelPair({ model: mockModel({ text: "just this" }) }),
+      unexpectedReply: UNEXPECTED_REPLY,
+      onContent: (text) => {
+        streamed.push(text);
+      }
+    });
+    expect(reply).toBe("just this");
+    expect(streamed).toEqual([]);
+  });
 });
 
 describe("runTurn — resilience", () => {

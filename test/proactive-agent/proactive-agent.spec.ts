@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
 import type { Schedule } from "agents";
 import { sessionText } from "@/agent/history";
@@ -23,6 +23,8 @@ function converse(stub: ReturnType<typeof freshStub>, text: string) {
 }
 
 describe("ProactiveAgent — Session persistence (real SQLite)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("persists the raw user turn before the (unavailable) model is called", async () => {
     const stub = freshStub("session");
     // No working AI binding, so the turn takes its graceful error path and no
@@ -35,6 +37,27 @@ describe("ProactiveAgent — Session persistence (real SQLite)", () => {
     expect(history).toHaveLength(1);
     expect(history[0].role).toBe("user");
     expect(sessionText(history[0])).toBe("remember: my favorite color is teal");
+  });
+
+  it("accepts a push context without posting when the turn never emits intermediate content", async () => {
+    // With no AI binding the turn hits its error path (no tool-call steps), so
+    // streaming must post nothing — the push context must be harmless. (The
+    // streaming path itself is unit-covered by loop.spec's `onContent` and
+    // notify.spec's build/sign/post helpers.)
+    const fetchSpy = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const stub = freshStub("push-ctx");
+    const reply = await stub.converse("hello", IDENTITY, {
+      taskId: "t-push",
+      contextId: "c-push",
+      pushUrl: "https://gateway.test/a2a/notifications",
+      pushToken: "tok",
+      jku: "https://agent.test/.well-known/jwks.json"
+    });
+
+    expect(typeof reply).toBe("string");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
