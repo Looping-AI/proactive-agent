@@ -15,7 +15,7 @@ const PUSH_URL = `${GATEWAY_ORIGIN}/a2a/notifications`;
 interface StubCapture {
   working?: string;
   converse?: { text: string; identity: unknown };
-  completed?: { taskId: string; task: Task };
+  completed?: { task: Task };
   reply: string;
   currentState?: Task["status"]["state"];
 }
@@ -34,8 +34,8 @@ function fakeEnv(cap: StubCapture): Env {
       cap.currentState
         ? ({ status: { state: cap.currentState } } as unknown as Task)
         : null,
-    completeTask: async (taskId: string, task: Task) => {
-      cap.completed = { taskId, task };
+    completeTask: async (task: Task) => {
+      cap.completed = { task };
     }
   };
   return {

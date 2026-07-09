@@ -87,7 +87,7 @@ export async function runNotifyTask(
   const canceled = await step.do("complete", async () => {
     const current = await stub.getTask(p.taskId);
     if (current?.status.state === "canceled") return true;
-    await stub.completeTask(p.taskId, task);
+    await stub.completeTask(task);
     return false;
   });
   if (canceled) return;

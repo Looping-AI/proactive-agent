@@ -47,8 +47,9 @@ export class ProactiveAgent extends Agent<Env> {
   }
 
   async onStart(): Promise<void> {
-    // Force construction so migrations run once on every hibernation wake-up.
-    void this.db;
+    // Await migrations before the SDK dispatches any RPC — eliminates the race
+    // between schema creation and first query on cold start / hibernation wake-up.
+    await this.db.ensureReady();
     // Register the weekly cleanup cron once per DO instance (idempotent guard).
     const existing = await this.listSchedules({ type: "cron" });
     if (!existing.some((s) => s.callback === "cleanupOldTasks")) {
@@ -156,7 +157,7 @@ export class ProactiveAgent extends Agent<Env> {
     this.db.tasks.markWorking(taskId);
   }
 
-  async completeTask(_taskId: string, task: Task): Promise<void> {
+  async completeTask(task: Task): Promise<void> {
     this.db.tasks.complete(task);
   }
 

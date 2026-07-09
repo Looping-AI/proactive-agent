@@ -49,10 +49,9 @@ export class A2AExecutor implements AgentExecutor {
     eventBus: ExecutionEventBus
   ): Promise<void> => {
     const pushConfig = this.cfg.pushConfig;
-    // Defensive: the Worker rejects a `message/send` without a pushNotificationConfig
-    // (400/JSON-RPC error) before the executor runs, so this is present here.
-    if (!pushConfig?.url) {
-      throw new Error("pushNotificationConfig with a url is required");
+    // Defensive: the Worker validates url + token before the executor runs.
+    if (!pushConfig?.url || !pushConfig.token) {
+      throw new Error("pushNotificationConfig url and token are required");
     }
 
     const text = textOf(requestContext.userMessage);
@@ -77,7 +76,7 @@ export class A2AExecutor implements AgentExecutor {
       identity: this.identity,
       contextId,
       pushUrl: pushConfig.url,
-      pushToken: pushConfig.token ?? "",
+      pushToken: pushConfig.token,
       jku: this.cfg.jku
     });
 

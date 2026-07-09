@@ -115,17 +115,30 @@ export default {
       // out of band. Reject a synchronous send up front — there is nowhere to
       // notify otherwise. (`tasks/*` and discovery methods carry no config.)
       const pushConfig = rpcBody.params?.configuration?.pushNotificationConfig;
-      if (rpcBody.method === "message/send" && !pushConfig?.url) {
-        return Response.json({
-          jsonrpc: "2.0",
-          id: rpcBody.id ?? null,
-          error: {
-            code: -32602,
-            message:
-              "pushNotificationConfig with a url is required: this agent " +
-              "replies asynchronously via push notification (A2A §13.2)"
+      if (rpcBody.method === "message/send") {
+        let pushConfigError: string | undefined;
+        if (!pushConfig?.url) {
+          pushConfigError =
+            "pushNotificationConfig.url is required: this agent " +
+            "replies asynchronously via push notification (A2A §13.2)";
+        } else if (!pushConfig.token) {
+          pushConfigError =
+            "pushNotificationConfig.token is required: the gateway uses it " +
+            "to correlate the callback to the pending task (A2A §13.2)";
+        } else {
+          try {
+            new URL(pushConfig.url);
+          } catch {
+            pushConfigError = `pushNotificationConfig.url is not a valid URL: ${pushConfig.url}`;
           }
-        });
+        }
+        if (pushConfigError) {
+          return Response.json({
+            jsonrpc: "2.0",
+            id: rpcBody.id ?? null,
+            error: { code: -32602, message: pushConfigError }
+          });
+        }
       }
 
       const handler = new DefaultRequestHandler(

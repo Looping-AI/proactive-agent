@@ -84,9 +84,14 @@ async function req(
 /** A `message/send` JSON-RPC body carrying `text` (with or without a push config). */
 function sendBody(
   text: string,
-  opts: { push?: boolean; method?: string } = {}
+  opts: {
+    push?: boolean;
+    method?: string;
+    pushConfig?: { url?: string; token?: string };
+  } = {}
 ) {
-  const { push = true, method = "message/send" } = opts;
+  const { push = true, method = "message/send", pushConfig } = opts;
+  const resolvedPushConfig = pushConfig ?? { url: PUSH_URL, token: PUSH_TOKEN };
   return {
     jsonrpc: "2.0",
     id: "1",
@@ -102,7 +107,7 @@ function sendBody(
       ...(push
         ? {
             configuration: {
-              pushNotificationConfig: { url: PUSH_URL, token: PUSH_TOKEN }
+              pushNotificationConfig: resolvedPushConfig
             }
           }
         : {})
@@ -262,6 +267,34 @@ describe("POST /a2a", () => {
     expect(res.status).toBe(200);
     const body = await res.json<{ error?: { code: number } }>();
     expect(body.error?.code).toBe(-32602);
+  });
+
+  it("rejects a message/send with a pushNotificationConfig missing the token", async () => {
+    const res = await postRpc(
+      sendBody("hi", { pushConfig: { url: PUSH_URL } }),
+      { key: "custom:1:ada" },
+      env
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      error?: { code: number; message: string };
+    }>();
+    expect(body.error?.code).toBe(-32602);
+    expect(body.error?.message).toMatch(/token/);
+  });
+
+  it("rejects a message/send with a malformed pushNotificationConfig url", async () => {
+    const res = await postRpc(
+      sendBody("hi", { pushConfig: { url: "not-a-url", token: PUSH_TOKEN } }),
+      { key: "custom:1:ada" },
+      env
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      error?: { code: number; message: string };
+    }>();
+    expect(body.error?.code).toBe(-32602);
+    expect(body.error?.message).toMatch(/not a valid URL/);
   });
 
   it("rejects a streaming method with an unsupported-operation JSON-RPC error", async () => {

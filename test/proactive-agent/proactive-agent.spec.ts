@@ -70,7 +70,7 @@ describe("ProactiveAgent — async task state (real SQLite)", () => {
       instance.beginTask({ messageId: "m-2", taskId: "t-9", contextId: "c-2" })
     );
     await runInDurableObject(stub, (instance) =>
-      instance.completeTask("t-9", {
+      instance.completeTask({
         kind: "task",
         id: "t-9",
         contextId: "c-2",
