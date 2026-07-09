@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import worker from "@/index";
+import type { Task } from "@a2a-js/sdk";
 import type { ProactiveAgent } from "@/proactive-agent";
+import { buildSubmittedTask } from "@/a2a/notify";
 import type { GatewayIdentity } from "@/a2a/verify";
 import {
   GATEWAY_ORIGIN,
@@ -103,6 +105,8 @@ async function postRpc(
     workerEnv
   );
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("GET /.well-known/jwks.json", () => {
   it("returns 200", async () => {
@@ -258,6 +262,53 @@ describe("POST /a2a", () => {
     expect(res.status).toBe(200);
     const body = await res.json<{ error?: { code: number } }>();
     expect(body.error?.code).toBe(-32004);
+  });
+
+  it("tasks/cancel — publishes a canceled Task for a known taskId", async () => {
+    const taskId = "task-cancel-test-1";
+    const contextId = "ctx-cancel-1";
+    const tasks = new Map<string, Task>([
+      [taskId, buildSubmittedTask(taskId, contextId)]
+    ]);
+    const identity = {
+      key: "custom:1:ada",
+      name: "Ada",
+      kind: "custom",
+      workspaceId: 1
+    };
+
+    vi.spyOn(env.ProactiveAgent, "get").mockReturnValue({
+      getTask: vi.fn(async (id: string) => tasks.get(id) ?? null),
+      saveTask: vi.fn(async (task: Task) => {
+        tasks.set(task.id, task);
+      }),
+      cancelTask: vi.fn(async (id: string) => {
+        const task = tasks.get(id);
+        if (!task) return null;
+        const canceled = {
+          ...task,
+          status: {
+            ...task.status,
+            state: "canceled" as const,
+            timestamp: new Date().toISOString()
+          }
+        };
+        tasks.set(id, canceled);
+        return canceled;
+      })
+    } as unknown as DurableObjectStub<ProactiveAgent>);
+
+    const res = await postRpc(cancelBody(taskId), identity);
+
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      result: { kind: string; id: string; status: { state: string } };
+    }>();
+    expect(body.result).toBeDefined();
+    expect(body.result.kind).toBe("task");
+    expect(body.result.id).toBe(taskId);
+    // Cancel must flip the state to "canceled" — the notify workflow skips canceled tasks.
+    expect(body.result.status.state).toBe("canceled");
   });
 
   it("tasks/cancel — returns taskNotFound error for an unknown taskId", async () => {
