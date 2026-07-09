@@ -15,9 +15,11 @@ import { makeGatewayToken } from "./helpers/auth";
 const PUSH_URL = `${GATEWAY_ORIGIN}/a2a/notifications`;
 const PUSH_TOKEN = "push-token-abc";
 
-// Stub env for tests that only need config vars (auth/card/jwks paths).
-// The executor uses global env (cloudflare:workers) for ProactiveAgent routing,
-// so these tests do not need a real ProactiveAgent binding.
+// Stub env for tests that only need config vars (auth/card/jwks paths) and
+// do not exercise ProactiveAgent routing — ProactiveAgent is left undefined.
+// Tests that go through message/send (which enqueues a Workflow and calls
+// getAgent) or tasks/cancel (which spies on env.ProactiveAgent.get) pass
+// the real miniflare `env` instead so the DO binding is live.
 const TEST_ENV: Env = {
   A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
   GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN]),

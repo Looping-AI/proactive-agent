@@ -60,9 +60,10 @@ export class NotifyTaskWorkflow extends WorkflowEntrypoint<
 
 /**
  * The orchestration itself, split from the `WorkflowEntrypoint` wiring so it can
- * be driven with a fake `step` + env in tests (workerd forbids constructing a
- * `WorkflowEntrypoint` outside the runtime). Steps are named so retries are
- * durable and idempotent.
+ * be driven with a fake `step` in tests (workerd forbids constructing a
+ * `WorkflowEntrypoint` outside the runtime). Reads env via the module-level
+ * `cloudflare:workers` import rather than a parameter. Steps are named so
+ * retries are durable and idempotent.
  */
 export async function runNotifyTask(
   p: NotifyTaskParams,
