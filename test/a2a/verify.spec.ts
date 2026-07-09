@@ -7,12 +7,12 @@ import {
   IDENTITY_CLAIM
 } from "@/a2a/verify";
 import {
-  makeGatewayToken,
   GATEWAY_ORIGIN,
   AGENT_ORIGIN,
   TEST_GATEWAY_PRIVATE_JWK,
   TEST_AGENT_PRIVATE_JWK
 } from "../fixtures";
+import { makeGatewayToken } from "../helpers/auth";
 
 // --- bearerToken ---
 

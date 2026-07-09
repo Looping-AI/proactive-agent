@@ -46,10 +46,10 @@ describe("buildBaseCard", () => {
     expect(card.url).toBe(`${ORIGIN}${A2A_RPC_PATH}`);
   });
 
-  it("disables streaming and push notifications", () => {
+  it("disables streaming and advertises push notifications (async accept + notify)", () => {
     const card = buildBaseCard(ORIGIN);
     expect(card.capabilities?.streaming).toBe(false);
-    expect(card.capabilities?.pushNotifications).toBe(false);
+    expect(card.capabilities?.pushNotifications).toBe(true);
   });
 
   it("includes required A2A fields", () => {

@@ -17,7 +17,7 @@ export const manifest: AgentManifest = {
     "identity JWT, then answers the caller via a Workers-AI tool loop with a " +
     "durable per-caller memory (one continuous, self-compacting conversation).",
   version: "0.3.0",
-  capabilities: { streaming: false, pushNotifications: false },
+  capabilities: { streaming: false, pushNotifications: true },
   defaultInputModes: ["text/plain"],
   defaultOutputModes: ["text/plain"],
   skills: [

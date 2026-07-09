@@ -16,14 +16,16 @@ sequenceDiagram
     Agent-->>Gateway: card-signing public JWKS
     Gateway->>Gateway: verify card JWS + PIN kid/jku (TOFU)
 
-    Note over Admin,Agent: Each call — "B knows A is really A"
-    Gateway->>Agent: POST /a2a (Authorization: Bearer <gateway JWT>)
+    Note over Admin,Agent: Each call — "B knows A is really A", then async accept + notify
+    Gateway->>Agent: POST /a2a message/send (Bearer gateway JWT, pushNotificationConfig{url,token})
     Agent->>Gateway: GET /.well-known/jwks.json (gateway public JWKS)
     Gateway-->>Agent: gateway public JWKS
     Agent->>Agent: verify JWT (sig + iss + aud + exp)
-    Agent->>Agent: route into ProactiveAgent DO (keyed by identity.key)
-    Agent->>Agent: run Workers-AI tool loop over the caller's Session
-    Agent-->>Gateway: A2A reply (LLM)
+    Agent->>Agent: record submitted Task (DO) + start NotifyTaskWorkflow
+    Agent-->>Gateway: submitted Task (the accept — returns immediately)
+    Note over Agent: workflow: converse() over the caller's Session (out of band)
+    Agent->>Gateway: POST pushNotificationConfig.url (/a2a/notifications)<br/>x-a2a-notification-token + Bearer(card-key JWT), body = completed Task
+    Gateway->>Gateway: verify token row + callback JWT (pinned card key), post reply to Slack
 ```
 
 This agent therefore does three things:
@@ -59,19 +61,20 @@ The DO is the agent runtime. It extends the Agents-SDK `Agent` (itself a genuine
 Cloudflare RPC** call — `await stub.converse(text, identity)` — with no internal
 HTTP or JSON-RPC layer: the DO is never exposed over the network, only reachable
 from this Worker's own code. [`src/a2a/executor.ts`](src/a2a/executor.ts) is
-the only A2A-protocol-aware piece on the Worker side: it extracts the inbound
-text, calls `converse()` on the caller's DO, and publishes the single reply. The
-DO backs a **Session** with `this.sql`:
+the only A2A-protocol-aware piece on the Worker side: it records a `submitted`
+Task in the caller's DO, starts the async delivery workflow, and publishes that
+Task as the accept (see **Async task delivery** below). The DO backs a
+**Session** with `this.sql`:
 
 - **One continuous Session per caller** ([`src/agent/session.ts`](src/agent/session.ts)):
   a read-only `"soul"` identity block + a writable `"memory"` scratchpad the model
   self-edits (via the Session `set_context` tool), plus history. All of a caller's
   turns — across every channel/thread — accumulate into this single conversation.
   The agent is built to be a **long-lived, proactive** partner, not a stateless
-  request/reply bot; a future phase may have the DO speak _first_ (push
-  notifications / alarm-driven outreach) rather than only replying inside a live
-  A2A call — the `this.schedule` alarm and the card's `pushNotifications` flag are
-  the seams for that.
+  request/reply bot. Replies are already delivered asynchronously (see **Async
+  task delivery** below); a future phase may go further and have the agent speak
+  _first_ (proactive outreach) rather than only in response to a turn — `this.schedule`
+  is the seam for that. It is already used for weekly data retention (see below).
 - **Compaction** keeps the context lean: history is automatically compacted once
   it grows past `COMPACT_AFTER_TOKENS` (the Sessions `compactAfter` mechanism).
 - **Episodic recall** ([`src/agent/recall.ts`](src/agent/recall.ts)): the raw
@@ -104,8 +107,45 @@ DO backs a **Session** with `this.sql`:
   instance namespace so neither can be spoofed from model input. Real domain tools
   (with per-call authorization) come in a later phase.
 
-Real domain tools + authorization and a self-service avatar are subsequent phases
-(see [`PLAN.md`](PLAN.md)).
+## Async task delivery (accept + notify)
+
+The gateway dispatches remote agents **asynchronously** (A2A push notifications,
+spec §13.2): it never blocks on generation. A `message/send` carries a
+`configuration.pushNotificationConfig` (`{ url, token }` — the gateway's
+`/a2a/notifications` webhook + a per-task validation token), the agent must
+**accept immediately** with a `submitted`/`working` Task, and the reply is
+delivered later by POSTing the terminal Task back to that webhook. A synchronous
+`Message` reply from a remote agent is a protocol violation.
+
+This agent implements that contract in three moving parts:
+
+- **Accept (Worker).** [`src/index.ts`](src/index.ts) rejects a `message/send`
+  without a `pushNotificationConfig` (JSON-RPC `-32602` — this agent is
+  async-only), then the [`A2AExecutor`](src/a2a/executor.ts) records a `submitted`
+  Task via the DO (`beginTask`, idempotent on the gateway's `messageId`), starts a
+  [`NotifyTaskWorkflow`](src/workflows/notify-task.ts) whose instance id is derived
+  from that `messageId`, and publishes the Task as the accept — all in well under
+  the gateway's 30s accept timeout. Task state persists in the DO
+  ([`src/a2a/task-store.ts`](src/a2a/task-store.ts) backs the a2a-js `TaskStore`),
+  so `tasks/get` works across the accept→callback gap. Rows are retained for 30 days;
+  `ProactiveAgent.cleanupOldTasks` runs as a weekly cron (Sunday 01:00 UTC) via the
+  Agents SDK `this.schedule` API, registered idempotently in `onStart`.
+- **Generate + deliver (Workflow).**
+  [`src/workflows/notify-task.ts`](src/workflows/notify-task.ts) is the durable
+  controller. Its `step.do(...)` steps run `converse()` on the caller's DO
+  (native RPC — a Workflow can't touch the DO's SQLite directly, so turn inputs
+  ride as the workflow payload and task state is mutated only through DO RPC),
+  then POST the completed Task to the gateway webhook. Steps are durable and
+  retried; a future human-approval interrupt slots in as a `step.waitForEvent`
+  between generation and delivery. Idempotency comes from the deterministic
+  instance id (a dispatch retry never starts a second run) plus the gateway's
+  single-use callback token, giving exactly-once effect.
+- **Callback auth (`src/a2a/notify.ts`).** The callback is authenticated exactly
+  like the AgentCard: a short-lived EdDSA JWT signed by `A2A_SIGNING_KEY` whose
+  protected-header `kid`+`jku` **equal the card's** (the gateway pinned those at
+  registration), with `aud` = the webhook URL. The completed Task carries the
+  reply in `status.message` (where the gateway's `extractText` reads it). Still
+  zero shared secrets — the gateway verifies against this agent's public JWKS.
 
 ## Canonical JSON (must match the gateway)
 
@@ -126,8 +166,9 @@ The card signature is computed over a deterministic serialization:
 | `A2A_SIGNING_KEY` | secret  | Ed25519 private JWK (with `kid`) that signs the AgentCard.                                           |
 | `GATEWAY_ORIGINS` | secret  | JSON array of trusted gateway origins, e.g. `["https://gw.example.com"]`. Validates `jku` and `iss`. |
 | `AI`              | binding | Workers AI binding (routed via AI Gateway) backing the LLM tool loop + recall embeddings.            |
-| `ProactiveAgent`  | binding | Durable Object namespace — one instance per caller, holding the durable Session.                     |
+| `ProactiveAgent`  | binding | Durable Object namespace — one instance per caller, holding the durable Session + task state.        |
 | `VECTORIZE`       | binding | Vectorize index (`proactive-agent-recall`, 1024-dim/cosine) storing per-instance episodic recall.    |
+| `NOTIFY_WORKFLOW` | binding | Cloudflare Workflow (`NotifyTaskWorkflow`) that generates a turn and delivers the push callback.     |
 
 > The recall index is created out of band before deploy (it must match the
 > embedding model's output):
@@ -137,22 +178,26 @@ The card signature is computed over a deterministic serialization:
 
 ## Files
 
-| File                                                                 | Role                                                                                                         |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| [`src/index.ts`](src/index.ts)                                       | Worker entry: card / JWKS; verifies JWT, then runs the A2A JSON-RPC server dispatching into the caller's DO. |
-| [`src/a2a/card.ts`](src/a2a/card.ts)                                 | Build + sign the AgentCard; derive public JWKS; parse signing key.                                           |
-| [`src/a2a/canonical.ts`](src/a2a/canonical.ts)                       | Canonical JSON contract (mirrors the gateway).                                                               |
-| [`src/a2a/verify.ts`](src/a2a/verify.ts)                             | Verify the gateway identity JWT.                                                                             |
-| [`src/proactive-agent/index.ts`](src/proactive-agent/index.ts)       | `ProactiveAgent` DO — owns the caller's Session; `converse()` RPC method answers turns.                      |
-| [`src/agent/session.ts`](src/agent/session.ts)                       | The continuous Session (soul + memory + compaction).                                                         |
-| [`src/a2a/executor.ts`](src/a2a/executor.ts)                         | `A2AExecutor` — thin A2A glue calling the caller's DO via native RPC.                                        |
-| [`src/agent/loop.ts`](src/agent/loop.ts)                             | `runTurn` — Session turn runner (primary → fallback, transient handling).                                    |
-| [`src/agent/model.ts`](src/agent/model.ts)                           | Workers-AI primary/fallback model pair (via AI Gateway).                                                     |
-| [`src/agent/prompt.ts`](src/agent/prompt.ts)                         | Soul (identity + rules) + per-request caller context.                                                        |
-| [`src/agent/tools.ts`](src/agent/tools.ts)                           | `whoami` / `echo` placeholders + the gated `recall` tool (pure handlers + AI-SDK wiring).                    |
-| [`src/agent/recall.ts`](src/agent/recall.ts)                         | Episodic recall: embed + upsert compacted-away messages to Vectorize; semantic search.                       |
-| [`src/a2a/inbound.ts`](src/a2a/inbound.ts)                           | Inbound A2A message → text (`textOf`) — the one place touching the `@a2a-js/sdk` message shape.              |
-| [`src/agent/history.ts`](src/agent/history.ts)                       | `<turn>` provenance parsing + Session-history message glue (no A2A types).                                   |
-| [`src/config.ts`](src/config.ts)                                     | Model ids, AI Gateway slug, loop bound, Session/compaction tuning.                                           |
-| [`src/proactive-agent/manifest.ts`](src/proactive-agent/manifest.ts) | AgentCard identity + advertised skills.                                                                      |
-| [`scripts/generate-keys.mjs`](scripts/generate-keys.mjs)             | Ed25519 JWK keypair generator.                                                                               |
+| File                                                                 | Role                                                                                                               |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [`src/index.ts`](src/index.ts)                                       | Worker entry: card / JWKS; verifies JWT, then runs the A2A JSON-RPC server dispatching into the caller's DO.       |
+| [`src/a2a/card.ts`](src/a2a/card.ts)                                 | Build + sign the AgentCard; derive public JWKS; parse signing key.                                                 |
+| [`src/a2a/canonical.ts`](src/a2a/canonical.ts)                       | Canonical JSON contract (mirrors the gateway).                                                                     |
+| [`src/a2a/verify.ts`](src/a2a/verify.ts)                             | Verify the gateway identity JWT.                                                                                   |
+| [`src/proactive-agent/index.ts`](src/proactive-agent/index.ts)       | `ProactiveAgent` DO — owns the caller's Session (`converse()`) + durable async task state (`beginTask`, …).        |
+| [`src/a2a/task.ts`](src/a2a/task.ts)                                 | `PlainTask` — SDK `Task` minus `unknown` extension `metadata`, so DO-RPC `Task` returns don't collapse to `never`. |
+| [`src/agent/session.ts`](src/agent/session.ts)                       | The continuous Session (soul + memory + compaction).                                                               |
+| [`src/a2a/executor.ts`](src/a2a/executor.ts)                         | `A2AExecutor` — accepts a turn (submitted Task) and starts the notify workflow.                                    |
+| [`src/a2a/task-store.ts`](src/a2a/task-store.ts)                     | `DurableTaskStore` — DO-backed a2a-js `TaskStore` (durable task state across accept→callback).                     |
+| [`src/a2a/notify.ts`](src/a2a/notify.ts)                             | Build the submitted/completed Tasks; sign + POST the gateway push-notification callback.                           |
+| [`src/workflows/notify-task.ts`](src/workflows/notify-task.ts)       | `NotifyTaskWorkflow` — durable controller: converse → complete → notify the gateway.                               |
+| [`src/agent/loop.ts`](src/agent/loop.ts)                             | `runTurn` — Session turn runner (primary → fallback, transient handling).                                          |
+| [`src/agent/model.ts`](src/agent/model.ts)                           | Workers-AI primary/fallback model pair (via AI Gateway).                                                           |
+| [`src/agent/prompt.ts`](src/agent/prompt.ts)                         | Soul (identity + rules) + per-request caller context.                                                              |
+| [`src/agent/tools.ts`](src/agent/tools.ts)                           | `whoami` / `echo` placeholders + the gated `recall` tool (pure handlers + AI-SDK wiring).                          |
+| [`src/agent/recall.ts`](src/agent/recall.ts)                         | Episodic recall: embed + upsert compacted-away messages to Vectorize; semantic search.                             |
+| [`src/a2a/inbound.ts`](src/a2a/inbound.ts)                           | Inbound A2A message → text (`textOf`) — the one place touching the `@a2a-js/sdk` message shape.                    |
+| [`src/agent/history.ts`](src/agent/history.ts)                       | `<turn>` provenance parsing + Session-history message glue (no A2A types).                                         |
+| [`src/config.ts`](src/config.ts)                                     | Model ids, AI Gateway slug, loop bound, Session/compaction tuning.                                                 |
+| [`src/proactive-agent/manifest.ts`](src/proactive-agent/manifest.ts) | AgentCard identity + advertised skills.                                                                            |
+| [`scripts/generate-keys.mjs`](scripts/generate-keys.mjs)             | Ed25519 JWK keypair generator.                                                                                     |

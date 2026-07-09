@@ -6,6 +6,12 @@ exactly what a third party must implement to be safely registered and routed to
 by the gateway — using **zero shared secrets**. All trust flows through
 asymmetric Ed25519 signatures over public JWKS.
 
+Replies are **asynchronous** (A2A push notifications): the agent accepts a turn
+immediately with a `submitted` task and delivers the answer later by POSTing the
+completed task to the gateway's `/a2a/notifications` webhook, authenticated with a
+callback JWT signed by the same card key. Generation + delivery run in a durable
+Cloudflare Workflow. See [ARCHITECTURE.md](ARCHITECTURE.md) → _Async task delivery_.
+
 ## Getting Started
 
 ### 1. Install dependencies
@@ -79,7 +85,9 @@ wrangler secret put GATEWAY_ORIGINS    # paste, e.g. ["https://<your-gateway>"]
 npx wrangler deploy
 ```
 
-You can observe it (stats and logs) on your cloudflare dashboard.
+SQLite schema migrations run automatically inside each Durable Object instance on first wake-up — no separate migration command is needed.
+
+You can observe the deployment (stats and logs) on your Cloudflare dashboard.
 
 ## Register it on the gateway
 
