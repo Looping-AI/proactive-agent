@@ -13,31 +13,34 @@ const USAGE = {
 };
 
 export interface MockStep {
-  /** Final assistant text for this step (finishReason "stop"). */
+  /**
+   * Assistant text for this step. On its own → finishReason "stop" (final reply).
+   * Alongside `toolCall` → the intermediate content emitted before a tool call.
+   */
   text?: string;
-  /** Emit a tool call instead of text (finishReason "tool-calls"). */
+  /** Emit a tool call (finishReason "tool-calls"); may accompany `text`. */
   toolCall?: { toolName: string; input?: unknown };
 }
 
 function stepResult(step: MockStep) {
+  const content: Array<
+    | { type: "text"; text: string }
+    | { type: "tool-call"; toolCallId: string; toolName: string; input: string }
+  > = [];
+  // Keep the empty-string text part so a `{ text: "" }` step still yields "".
+  if (step.text !== undefined) content.push({ type: "text", text: step.text });
   if (step.toolCall) {
-    return {
-      content: [
-        {
-          type: "tool-call" as const,
-          toolCallId: crypto.randomUUID(),
-          toolName: step.toolCall.toolName,
-          input: JSON.stringify(step.toolCall.input ?? {})
-        }
-      ],
-      finishReason: { unified: "tool-calls" as const, raw: undefined },
-      usage: USAGE,
-      warnings: []
-    };
+    content.push({
+      type: "tool-call",
+      toolCallId: crypto.randomUUID(),
+      toolName: step.toolCall.toolName,
+      input: JSON.stringify(step.toolCall.input ?? {})
+    });
   }
+  const unified = step.toolCall ? ("tool-calls" as const) : ("stop" as const);
   return {
-    content: [{ type: "text" as const, text: step.text ?? "" }],
-    finishReason: { unified: "stop" as const, raw: undefined },
+    content,
+    finishReason: { unified, raw: undefined },
     usage: USAGE,
     warnings: []
   };

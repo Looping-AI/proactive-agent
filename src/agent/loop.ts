@@ -1,4 +1,4 @@
-import type { ToolSet } from "ai";
+import type { FinishReason, StepResult, ToolSet } from "ai";
 import { generateText, stepCountIs } from "ai";
 import type { ModelPair } from "./model";
 import { MAX_STEPS } from "@/config";
@@ -37,6 +37,39 @@ export interface RunTurnArgs {
   models: ModelPair;
   /** Friendly reply for an unexpected (non-transient) failure. */
   unexpectedReply: string;
+  /**
+   * Called with each **intermediate** assistant content message — text the model
+   * emits in a step that also makes tool calls (`finishReason:"tool-calls"`), i.e.
+   * before the final reply. Used to stream those messages out live; the final
+   * reply is the return value, not an `onContent` call. `stepIndex` is the 0-based
+   * step ordinal (stable enough across a primary→fallback re-run for the gateway
+   * to dedupe on). Best-effort — the caller must swallow its own failures.
+   */
+  onContent?: (text: string, stepIndex: number) => void | Promise<void>;
+}
+
+/** A step is "intermediate" when it makes tool calls — more content follows. */
+function isIntermediateStep(step: { finishReason: FinishReason }): boolean {
+  return step.finishReason === "tool-calls";
+}
+
+/**
+ * Returns a fresh `onStepFinish` callback for one `generateText` attempt.
+ * Fires `onContent` for each intermediate step (text that accompanies tool
+ * calls); the final step is skipped because its text is the return value.
+ * A fresh handler per attempt resets the 0-based `stepIndex` counter so a
+ * primary→fallback re-run reuses the same indices and the gateway dedupes.
+ */
+function buildIntermediateContentHandler(
+  onContent: NonNullable<RunTurnArgs["onContent"]>
+): (step: StepResult<ToolSet>) => Promise<void> {
+  let stepIndex = 0;
+  return async (step) => {
+    const i = stepIndex++;
+    if (!isIntermediateStep(step)) return;
+    const content = step.text.trim();
+    if (content) await onContent(content, i);
+  };
 }
 
 /**
@@ -51,7 +84,14 @@ export interface RunTurnArgs {
  * the DO's `converse()` caller always gets a string to publish.
  */
 export async function runTurn(args: RunTurnArgs): Promise<string> {
-  const { session, text, systemSuffix, tools: extraTools, models } = args;
+  const {
+    session,
+    text,
+    systemSuffix,
+    tools: extraTools,
+    models,
+    onContent
+  } = args;
   let modelId = models.primaryId();
 
   try {
@@ -71,11 +111,19 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
       maxRetries: 0
     };
 
+    // Stream each intermediate content message (text on a step that also makes
+    // tool calls) as it finishes. The final step (`stop`/`length`) is the reply
+    // and is delivered via the return value, not here. Each attempt gets a fresh
+    // handler so the 0-based stepIndex counter resets; a primary→fallback re-run
+    // reuses the same index per position and the gateway dedupes by id.
     let result: Awaited<ReturnType<typeof generateText>>;
     try {
       result = await generateText({
         model: models.primary(),
-        ...generateArgs
+        ...generateArgs,
+        onStepFinish: onContent
+          ? buildIntermediateContentHandler(onContent)
+          : undefined
       });
     } catch (primaryErr) {
       console.warn(
@@ -85,7 +133,10 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
       modelId = models.fallbackId();
       result = await generateText({
         model: models.fallback(),
-        ...generateArgs
+        ...generateArgs,
+        onStepFinish: onContent
+          ? buildIntermediateContentHandler(onContent)
+          : undefined
       });
     }
 

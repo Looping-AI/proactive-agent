@@ -16,7 +16,7 @@ const PUSH_URL = `${GATEWAY_ORIGIN}/a2a/notifications`;
 /** Records what the workflow drove on the DO. */
 interface StubCapture {
   working?: string;
-  converse?: { text: string; identity: unknown };
+  converse?: { text: string; identity: unknown; push: unknown };
   completed?: { task: Task };
   reply: string;
   currentState?: Task["status"]["state"];
@@ -54,8 +54,8 @@ function mockAgent(cap: StubCapture) {
     markWorking: vi.fn(async (id: string) => {
       cap.working = id;
     }),
-    converse: vi.fn(async (text: string, identity: unknown) => {
-      cap.converse = { text, identity };
+    converse: vi.fn(async (text: string, identity: unknown, push: unknown) => {
+      cap.converse = { text, identity, push };
       return cap.reply;
     }),
     getTask: vi.fn(async (): Promise<Task | null> =>
@@ -99,6 +99,13 @@ describe("NotifyTaskWorkflow", () => {
     expect((cap.converse?.identity as { key: string }).key).toBe(
       "custom:1:ada"
     );
+    // The push context is threaded to the DO so it can stream working callbacks.
+    expect(cap.converse?.push).toMatchObject({
+      taskId: "task-1",
+      contextId: "ctx-1",
+      pushUrl: PUSH_URL,
+      pushToken: "tok-xyz"
+    });
     expect(cap.completed?.task.status.state).toBe("completed");
 
     // POSTed to the gateway webhook with the validation token + signed JWT.

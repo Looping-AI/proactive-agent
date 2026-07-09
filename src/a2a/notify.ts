@@ -53,31 +53,76 @@ export function buildSubmittedTask(
 }
 
 /**
- * The terminal `completed` Task POSTed to the gateway callback. The gateway's
- * `extractText` reads `status.message.parts` first, so the reply lives there as
- * an `agent` message. Only `state:"completed"` is accepted by the gateway.
+ * A Task snapshot POSTed to the gateway callback in a given `state`, carrying one
+ * `agent` message. The gateway's `extractText` reads `status.message.parts`, so
+ * the text lives there. `messageId` is the gateway's per-message dedupe key, so
+ * callers pass a **stable** id (never a fresh random per attempt) — a callback the
+ * workflow/DO re-runs must reuse the same id or the gateway double-posts.
  */
-export function buildCompletedTask(
+function buildTaskUpdate(
   taskId: string,
   contextId: string,
-  reply: string
+  state: "working" | "completed",
+  text: string,
+  messageId: string
 ): PlainTask {
   return {
     kind: "task",
     id: taskId,
     contextId,
     status: {
-      state: "completed",
+      state,
       timestamp: new Date().toISOString(),
       message: {
         kind: "message",
         role: "agent",
-        messageId: crypto.randomUUID(),
-        parts: [{ kind: "text", text: reply }],
+        messageId,
+        parts: [{ kind: "text", text }],
         contextId
       }
     }
   };
+}
+
+/**
+ * A non-terminal `working` Task snapshot carrying an intermediate content message.
+ * Streamed live from the DO as the tool loop emits content before the final reply.
+ * `messageId` is derived from `${taskId}:${stepIndex}` — stable across re-runs (see
+ * {@link buildTaskUpdate}) so the gateway dedupes correctly on workflow replay.
+ */
+export function buildWorkingTask(
+  taskId: string,
+  contextId: string,
+  text: string,
+  stepIndex: number
+): PlainTask {
+  return buildTaskUpdate(
+    taskId,
+    contextId,
+    "working",
+    text,
+    `${taskId}:${stepIndex}`
+  );
+}
+
+/**
+ * The terminal `completed` Task POSTed to the gateway callback. The `messageId` is
+ * deterministic (`${taskId}:final`, not a fresh UUID) because this is built in the
+ * workflow body, which re-runs on replay: a random id would change on a notify-step
+ * retry and the gateway would dedupe the final message as a new one and double-post.
+ */
+export function buildCompletedTask(
+  taskId: string,
+  contextId: string,
+  reply: string
+): PlainTask {
+  return buildTaskUpdate(
+    taskId,
+    contextId,
+    "completed",
+    reply,
+    `${taskId}:final`
+  );
 }
 
 /**

@@ -76,9 +76,17 @@ export async function runNotifyTask(
   });
 
   // Generate the reply. Durable + retried; `converse` resolves its own transient
-  // failures to a friendly string, so a throw here is a genuine RPC fault.
+  // failures to a friendly string, so a throw here is a genuine RPC fault. The
+  // push context lets the DO stream intermediate `working` callbacks live during
+  // generation; this step still returns only the terminal reply text.
   const reply = await step.do("generate", () =>
-    stub.converse(p.text, p.identity)
+    stub.converse(p.text, p.identity, {
+      taskId: p.taskId,
+      contextId: p.contextId,
+      pushUrl: p.pushUrl,
+      pushToken: p.pushToken,
+      jku: p.jku
+    })
   );
 
   const task = buildCompletedTask(p.taskId, p.contextId, reply);

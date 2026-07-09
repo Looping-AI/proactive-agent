@@ -3,6 +3,12 @@ import { env } from "cloudflare:workers";
 import type { Task } from "@a2a-js/sdk";
 import type { GatewayIdentity } from "@/a2a/verify";
 import type { PlainTask } from "@/a2a/task";
+import { parsePrivateJwk } from "@/a2a/card";
+import {
+  buildWorkingTask,
+  postNotification,
+  signCallbackJwt
+} from "@/a2a/notify";
 import { AgentDB } from "@/db/db";
 import { createModelPair, embedTexts, type ModelPair } from "@/agent/model";
 import { callerContext, soulPrompt } from "@/agent/prompt";
@@ -15,6 +21,26 @@ import {
   MEMORY_DESCRIPTION,
   MEMORY_MAX_TOKENS
 } from "@/config";
+
+/**
+ * Everything the DO needs to stream **intermediate** `working` push notifications
+ * live during a turn (see {@link file://../a2a/notify.ts}). Threaded in from the
+ * {@link file://../workflows/notify-task.ts NotifyTaskWorkflow}, which owns the
+ * terminal `completed` callback; these are the progress messages before it.
+ * RPC-serializable (crosses the workflow → DO boundary).
+ */
+export interface TurnPushContext {
+  /** The accepted task id (echoed on every callback of this turn). */
+  taskId: string;
+  /** A2A context id, echoed on every callback. */
+  contextId: string;
+  /** Gateway push-notification webhook (also the callback JWT `aud`). */
+  pushUrl: string;
+  /** Per-task validation token the gateway set; echoed in the callback header. */
+  pushToken: string;
+  /** This agent's card-signing JWKS URL — the callback JWT `jku` (pinned key). */
+  jku: string;
+}
 
 /** Reply the DO returns when an unexpected (non-transient) failure aborts a turn. */
 const UNEXPECTED_REPLY =
@@ -104,8 +130,18 @@ export class ProactiveAgent extends Agent<Env> {
    * The turn loop {@link runTurn} never throws — transient/unexpected failures
    * resolve to a friendly reply — so this method rejects only on a genuine
    * RPC/transport fault, keeping the Worker-side caller trivial.
+   *
+   * When `push` is supplied, intermediate assistant content (text emitted on a
+   * step that also makes tool calls) is streamed live to the gateway as `working`
+   * callbacks — best-effort, so a failed progress post never fails the turn. The
+   * returned string is the terminal reply, delivered separately as the durable
+   * `completed` callback by the workflow.
    */
-  async converse(text: string, identity: GatewayIdentity): Promise<string> {
+  async converse(
+    text: string,
+    identity: GatewayIdentity,
+    push?: TurnPushContext
+  ): Promise<string> {
     const session = this.getSession(identity);
     // Gate the `recall` tool on "has compacted at least once" — nothing is
     // archived (and the tool would only return empties) before the first
@@ -122,8 +158,58 @@ export class ProactiveAgent extends Agent<Env> {
         hasArchive
       }),
       models: this.modelPair(),
-      unexpectedReply: UNEXPECTED_REPLY
+      unexpectedReply: UNEXPECTED_REPLY,
+      onContent: push ? this.streamWorking(push) : undefined
     });
+  }
+
+  /**
+   * Build the intermediate-content sink for a turn: sign the callback JWT once
+   * (lazily, reused across every progress message; 5m TTL), then POST each content
+   * message as a `working` Task snapshot. Best-effort — every failure is logged
+   * and swallowed so streaming never aborts generation or the turn. `messageId`
+   * is `${taskId}:${stepIndex}` so a re-run dedupes on the gateway.
+   */
+  private streamWorking(
+    push: TurnPushContext
+  ): (text: string, stepIndex: number) => Promise<void> {
+    let jwt: string | undefined;
+    return async (text: string, stepIndex: number) => {
+      try {
+        jwt ??= await signCallbackJwt(
+          parsePrivateJwk(this.env.A2A_SIGNING_KEY),
+          {
+            jku: push.jku,
+            aud: push.pushUrl
+          }
+        );
+        const task = buildWorkingTask(
+          push.taskId,
+          push.contextId,
+          text,
+          stepIndex
+        );
+        const res = await postNotification(
+          push.pushUrl,
+          push.pushToken,
+          jwt,
+          task
+        );
+        if (!res.ok) {
+          console.warn("[proactive-agent] working notification non-2xx", {
+            taskId: push.taskId,
+            stepIndex,
+            status: res.status
+          });
+        }
+      } catch (err) {
+        console.warn("[proactive-agent] working notification failed", {
+          taskId: push.taskId,
+          stepIndex,
+          err: String(err)
+        });
+      }
+    };
   }
 
   // --- Async task state (accept + notify) ---------------------------------
