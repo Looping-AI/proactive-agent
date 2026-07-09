@@ -107,9 +107,6 @@ Task as the accept (see **Async task delivery** below). The DO backs a
   instance namespace so neither can be spoofed from model input. Real domain tools
   (with per-call authorization) come in a later phase.
 
-Real domain tools + authorization and a self-service avatar are subsequent phases
-(see [`PLAN.md`](PLAN.md)).
-
 ## Async task delivery (accept + notify)
 
 The gateway dispatches remote agents **asynchronously** (A2A push notifications,

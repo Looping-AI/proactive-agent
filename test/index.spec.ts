@@ -27,9 +27,10 @@ interface Capture {
  * the Worker's accept behavior without a real DO.
  */
 function fakeProactiveAgent(
-  capture: Capture
+  capture: Capture,
+  seedTasks: Map<string, Task> = new Map()
 ): DurableObjectNamespace<ProactiveAgent> {
-  const tasks = new Map<string, Task>();
+  const tasks = new Map<string, Task>(seedTasks);
   const stub = {
     beginTask: async (input: {
       messageId: string;
@@ -45,7 +46,20 @@ function fakeProactiveAgent(
     saveTask: async (task: Task) => {
       tasks.set(task.id, task);
     },
-    cancelTask: async () => null
+    cancelTask: async (taskId: string) => {
+      const task = tasks.get(taskId);
+      if (!task) return null;
+      const canceled = {
+        ...task,
+        status: {
+          ...task.status,
+          state: "canceled" as const,
+          timestamp: new Date().toISOString()
+        }
+      };
+      tasks.set(taskId, canceled);
+      return canceled;
+    }
   };
   return {
     idFromName: (name: string) => {
@@ -112,6 +126,16 @@ function sendBody(
           }
         : {})
     }
+  };
+}
+
+/** A `tasks/cancel` JSON-RPC body for `taskId`. */
+function cancelBody(taskId: string) {
+  return {
+    jsonrpc: "2.0",
+    id: "1",
+    method: "tasks/cancel",
+    params: { id: taskId }
   };
 }
 
@@ -308,6 +332,63 @@ describe("POST /a2a", () => {
     expect(res.status).toBe(200);
     const body = await res.json<{ error?: { code: number } }>();
     expect(body.error?.code).toBe(-32004);
+  });
+
+  it("tasks/cancel — publishes a canceled Task for a known taskId", async () => {
+    // Pre-seed a submitted task so the task store can find it on load.
+    const taskId = "task-cancel-test-1";
+    const contextId = "ctx-cancel-1";
+    const seeded = new Map<string, Task>([
+      [taskId, buildSubmittedTask(taskId, contextId)]
+    ]);
+
+    const identity = {
+      key: "custom:1:ada",
+      name: "Ada",
+      kind: "custom",
+      workspaceId: 1
+    };
+    const capture: Capture = {};
+
+    const res = await postRpc(cancelBody(taskId), identity, {
+      ...env,
+      ProactiveAgent: fakeProactiveAgent(capture, seeded),
+      NOTIFY_WORKFLOW: fakeWorkflow(capture)
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      result: { kind: string; id: string; status: { state: string } };
+    }>();
+    // The response must be a Task (not an error).
+    expect(body.result).toBeDefined();
+    expect(body.result.kind).toBe("task");
+    expect(body.result.id).toBe(taskId);
+    // Cancel must flip the state to "canceled" — this is the contract the
+    // async accept+notify path relies on (the notify workflow skips canceled tasks).
+    expect(body.result.status.state).toBe("canceled");
+    // The DO is still keyed by the verified identity.
+    expect(capture.name).toBe("custom:1:ada");
+  });
+
+  it("tasks/cancel — returns taskNotFound error for an unknown taskId", async () => {
+    const capture: Capture = {};
+    const res = await postRpc(
+      cancelBody("no-such-task"),
+      { key: "custom:1:ada" },
+      {
+        ...env,
+        ProactiveAgent: fakeProactiveAgent(capture),
+        NOTIFY_WORKFLOW: fakeWorkflow(capture)
+      }
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json<{
+      error?: { code: number; message: string };
+    }>();
+    // A2A error code -32001 = TaskNotFound
+    expect(body.error?.code).toBe(-32001);
   });
 });
 
