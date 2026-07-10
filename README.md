@@ -31,13 +31,14 @@ Copy the printed private JWK into `.dev.vars` as `A2A_SIGNING_KEY`.
 
 ### 3. Configure the gateway origin
 
-In `.dev.vars`, point `GATEWAY_ORIGINS` at your deployed gateway:
+In `.dev.vars`, list the hostname of your deployed gateway:
 
 ```sh
-GATEWAY_ORIGINS=["https://<your-gateway>"]
+GATEWAY_ORIGINS=["gateway.example"]
 ```
 
-This must match the gateway's own `GATEWAY_ORIGIN`. Add multiple entries for multi-worker setups or domain transitions.
+The hostname must identify the gateway that signs calls to this agent. Add
+multiple entries for multi-worker setups or domain transitions.
 
 ### 4. Run locally
 
@@ -81,7 +82,7 @@ Upload the signing key and gateway origins as Wrangler secrets, then deploy:
 ```sh
 npm run keygen agent-1                 # generate new key for production
 wrangler secret put A2A_SIGNING_KEY    # paste the new private JWK
-wrangler secret put GATEWAY_ORIGINS    # paste, e.g. ["https://<your-gateway>"]
+wrangler secret put GATEWAY_ORIGINS    # paste, e.g. ["gateway.example"]
 npx wrangler deploy
 ```
 
