@@ -73,7 +73,11 @@ const OPTS = {
 describe("normalizeGatewayOrigins", () => {
   it("canonicalizes trailing slashes and insecure or omitted schemes to HTTPS", () => {
     expect(
-      normalizeGatewayOrigins(["https://gateway.test/", "http://gateway.test", "gateway.test"])
+      normalizeGatewayOrigins([
+        "https://gateway.test/",
+        "http://gateway.test",
+        "gateway.test"
+      ])
     ).toEqual([GATEWAY_ORIGIN, GATEWAY_ORIGIN, GATEWAY_ORIGIN]);
   });
 
