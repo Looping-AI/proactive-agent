@@ -3,6 +3,7 @@ import { SignJWT, importJWK } from "jose";
 import {
   bearerToken,
   GatewayAuthError,
+  normalizeGatewayOrigins,
   verifyGatewayToken,
   IDENTITY_CLAIM
 } from "@/a2a/verify";
@@ -68,6 +69,33 @@ const OPTS = {
   allowedOrigins: [GATEWAY_ORIGIN],
   audience: AGENT_ORIGIN
 };
+
+describe("normalizeGatewayOrigins", () => {
+  it("canonicalizes trailing slashes and insecure or omitted schemes to HTTPS", () => {
+    expect(
+      normalizeGatewayOrigins([
+        "https://gateway.test/",
+        "http://gateway.test",
+        "gateway.test"
+      ])
+    ).toEqual([GATEWAY_ORIGIN, GATEWAY_ORIGIN, GATEWAY_ORIGIN]);
+  });
+
+  it("lets verifyGatewayToken accept hostname/http variants in allowedOrigins", async () => {
+    const token = await makeGatewayToken();
+
+    await expect(
+      verifyGatewayToken(token, { ...OPTS, allowedOrigins: ["gateway.test"] })
+    ).resolves.toBeTruthy();
+
+    await expect(
+      verifyGatewayToken(token, {
+        ...OPTS,
+        allowedOrigins: ["http://gateway.test/"]
+      })
+    ).resolves.toBeTruthy();
+  });
+});
 
 describe("verifyGatewayToken — error paths", () => {
   it("throws GatewayAuthError for a JWT without jku header", async () => {
