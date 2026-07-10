@@ -115,7 +115,7 @@ describe("runTurn — happy path", () => {
   it("runs a tool call then returns the follow-up text", async () => {
     const { reply } = await run({
       model: mockModel(
-        { toolCall: { toolName: "echo", input: { text: "ping" } } },
+        { toolCall: { toolName: "noop", input: { text: "ping" } } },
         { text: "I echoed: ping" }
       )
     });
@@ -133,7 +133,7 @@ describe("runTurn — happy path", () => {
         model: mockModel(
           {
             text: "thinking out loud",
-            toolCall: { toolName: "echo", input: { text: "ping" } }
+            toolCall: { toolName: "noop", input: { text: "ping" } }
           },
           { text: "final answer" }
         )

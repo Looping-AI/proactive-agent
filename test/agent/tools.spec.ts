@@ -1,37 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { whoami, echo, buildTools, recall } from "@/agent/tools";
+import { buildTools, recall } from "@/agent/tools";
 import type { RecallDeps } from "@/agent/tools";
 import type { RecallIndex } from "@/agent/recall";
-
-describe("whoami", () => {
-  it("returns the identity fields, nulling absent ones", () => {
-    expect(
-      whoami({
-        key: "custom:3:demo",
-        name: "Demo Agent",
-        kind: "custom",
-        workspaceId: 3
-      })
-    ).toEqual({
-      key: "custom:3:demo",
-      name: "Demo Agent",
-      kind: "custom",
-      workspaceId: 3
-    });
-    expect(whoami({})).toEqual({
-      key: null,
-      name: null,
-      kind: null,
-      workspaceId: null
-    });
-  });
-});
-
-describe("echo", () => {
-  it("returns the text verbatim", () => {
-    expect(echo({ text: "hi" })).toEqual({ text: "hi" });
-  });
-});
+import type { QuickActionBinding } from "agents/browser";
 
 /** Recall deps backed by a fake index returning one canned match. */
 function recallDeps(hasArchive: boolean): RecallDeps {
@@ -60,6 +31,17 @@ function recallDeps(hasArchive: boolean): RecallDeps {
   };
 }
 
+/**
+ * Stub Browser Rendering binding. Never invoked here — the Quick Action tools
+ * only hit `quickAction` inside their `execute`, which the tool-registration
+ * assertions below never call.
+ */
+const browserStub: QuickActionBinding = {
+  async quickAction() {
+    throw new Error("not called in registration tests");
+  }
+};
+
 describe("recall", () => {
   it("returns the archived matches when there is an archive", async () => {
     const out = await recall(recallDeps(true), { query: "favorite color" });
@@ -77,18 +59,39 @@ describe("recall", () => {
 });
 
 describe("buildTools", () => {
-  it("exposes exactly the whoami and echo tools by default", () => {
-    const tools = buildTools({ name: "Demo Agent" });
-    expect(Object.keys(tools).sort()).toEqual(["echo", "whoami"]);
+  it("exposes no tools by default (Session contributes set_context in the loop)", () => {
+    const tools = buildTools();
+    expect(Object.keys(tools)).toEqual([]);
   });
 
   it("omits recall until this caller has compacted at least once", () => {
-    const tools = buildTools({ name: "Demo Agent" }, recallDeps(false));
-    expect(Object.keys(tools).sort()).toEqual(["echo", "whoami"]);
+    const tools = buildTools(recallDeps(false));
+    expect(Object.keys(tools)).toEqual([]);
   });
 
   it("adds the recall tool once an archive exists", () => {
-    const tools = buildTools({ name: "Demo Agent" }, recallDeps(true));
-    expect(Object.keys(tools).sort()).toEqual(["echo", "recall", "whoami"]);
+    const tools = buildTools(recallDeps(true));
+    expect(Object.keys(tools).sort()).toEqual(["recall"]);
+  });
+
+  it("adds the browser tools when a Browser Rendering binding is present", () => {
+    const tools = buildTools(undefined, browserStub);
+    expect(Object.keys(tools).sort()).toEqual([
+      "browser_extract",
+      "browser_links",
+      "browser_markdown",
+      "browser_scrape"
+    ]);
+  });
+
+  it("adds both browser and recall tools together", () => {
+    const tools = buildTools(recallDeps(true), browserStub);
+    expect(Object.keys(tools).sort()).toEqual([
+      "browser_extract",
+      "browser_links",
+      "browser_markdown",
+      "browser_scrape",
+      "recall"
+    ]);
   });
 });

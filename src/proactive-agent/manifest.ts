@@ -29,11 +29,11 @@ export const manifest: AgentManifest = {
       tags: ["chat", "assistant"]
     },
     {
-      id: "whoami",
-      name: "Who am I",
+      id: "browse",
+      name: "Browse the web",
       description:
-        "Report the verified identity of the calling gateway-agent instance (from the gateway JWT) — not the Slack end user.",
-      tags: ["identity"]
+        "Read and scrape live web pages — render a page as Markdown, extract structured data, or list its links.",
+      tags: ["web", "browser"]
     }
   ]
 };

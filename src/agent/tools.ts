@@ -1,43 +1,18 @@
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
-import type { GatewayIdentity } from "@/a2a/verify";
+import { createQuickActionTools } from "agents/browser/ai";
+import type { QuickActionBinding } from "agents/browser";
 import type { Embed } from "./model";
 import { recallSearch, type RecallIndex, type RecallResult } from "./recall";
 import { RECALL_TOP_K } from "@/config";
 
 /**
- * Phase-1 placeholder tools that prove tool-calling works end to end. Real domain
- * tools (with per-call authorization on the caller's roles) arrive in a later
- * phase. The pure handlers are exported separately from the AI-SDK `tool()`
- * wiring so they unit-test without an LLM.
+ * The agent's tools. Pure handlers are exported separately from the AI-SDK
+ * `tool()` wiring so they unit-test without an LLM. Tools that depend on a
+ * per-instance binding (Vectorize, Browser Rendering) are gated: registered
+ * only when their dependency is present, with the binding closed over so it is
+ * never model input.
  */
-
-export interface WhoamiResult {
-  key: string | null;
-  name: string | null;
-  kind: string | null;
-  workspaceId: number | null;
-}
-
-/**
- * Report the verified identity of the calling gateway-agent instance carried
- * by the gateway JWT — not the Slack end user, which the gateway never
- * attests to remote agents. For the human speaker on a given turn, read the
- * `<turn from="…" id="…">` tag in the message text instead.
- */
-export function whoami(identity: GatewayIdentity): WhoamiResult {
-  return {
-    key: identity.key ?? null,
-    name: identity.name ?? null,
-    kind: identity.kind ?? null,
-    workspaceId: identity.workspaceId ?? null
-  };
-}
-
-/** Echo text back verbatim. */
-export function echo(args: { text: string }): { text: string } {
-  return { text: args.text };
-}
 
 /**
  * Per-instance dependencies for the `recall` tool. The Vectorize binding, the
@@ -81,31 +56,33 @@ export async function recall(
 }
 
 /**
- * Build the toolset for a turn, closing over the verified caller identity so
- * `whoami` can never be spoofed from model input. The `recall` tool is included
- * only once this caller's history has been compacted at least once
- * (`recallDeps.hasArchive`) — there is nothing to search before that.
+ * Web read/scrape tools (`browser_markdown`, `browser_extract`, `browser_links`,
+ * `browser_scrape`), backed by Cloudflare Browser Rendering Quick Actions. The
+ * binding is closed over, never model input; `maxChars` is lowered from the SDK
+ * default to protect the small chat model's context window. `content` (raw HTML)
+ * stays opt-in.
+ */
+export function buildBrowserTools(browser: QuickActionBinding): ToolSet {
+  return createQuickActionTools({ browser, maxChars: 20000 });
+}
+
+/**
+ * Build the toolset for a turn. Tools are gated on their per-instance
+ * dependency: `recall` only once this caller's history has been compacted at
+ * least once (`recallDeps.hasArchive`) — nothing to search before that — and the
+ * browser tools only when a Browser Rendering binding is available. The Session
+ * contributes its own `set_context` tool on top of these (merged in the loop),
+ * so an otherwise-empty toolset here is fine.
  */
 export function buildTools(
-  identity: GatewayIdentity,
-  recallDeps?: RecallDeps
+  recallDeps?: RecallDeps,
+  browser?: QuickActionBinding
 ): ToolSet {
-  const tools: ToolSet = {
-    whoami: tool({
-      description:
-        "Return the verified identity of the calling gateway-agent instance (as attested by the gateway JWT). This is not the Slack end user's identity — read the `<turn>` tag in the message text for that. Takes no input.",
-      inputSchema: z.object({}),
-      execute: async () => whoami(identity)
-    }),
-    echo: tool({
-      description:
-        "Echo a piece of text back verbatim. Useful for confirming tool calls work.",
-      inputSchema: z.object({
-        text: z.string().describe("The text to echo back")
-      }),
-      execute: async (args) => echo(args)
-    })
-  };
+  const tools: ToolSet = {};
+
+  if (browser) {
+    Object.assign(tools, buildBrowserTools(browser));
+  }
 
   if (recallDeps?.hasArchive) {
     tools.recall = tool({

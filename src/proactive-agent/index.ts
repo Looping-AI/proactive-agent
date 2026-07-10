@@ -151,12 +151,15 @@ export class ProactiveAgent extends Agent<Env> {
       session,
       text,
       systemSuffix: callerContext(identity),
-      tools: buildTools(identity, {
-        index: this.env.VECTORIZE,
-        namespace: recallNamespace(identity),
-        embed: embedTexts,
-        hasArchive
-      }),
+      tools: buildTools(
+        {
+          index: this.env.VECTORIZE,
+          namespace: recallNamespace(identity),
+          embed: embedTexts,
+          hasArchive
+        },
+        this.env.BROWSER
+      ),
       models: this.modelPair(),
       unexpectedReply: UNEXPECTED_REPLY,
       onContent: push ? this.streamWorking(push) : undefined
