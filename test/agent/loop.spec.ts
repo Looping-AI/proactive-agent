@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
+import { tool } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import type { SessionMessage } from "agents/experimental/memory/session";
 import { runTurn, TRANSIENT_REPLY } from "@/agent/loop";
@@ -6,6 +8,15 @@ import { createModelPair, type ModelPair } from "@/agent/model";
 import type { SessionLike } from "@/agent/session";
 import { sessionText } from "@/agent/history";
 import { mockModel } from "./mock-model";
+
+/** Minimal real tool used to exercise the multi-step tool-call loop. */
+const ECHO_TOOL: ToolSet = {
+  echo: tool({
+    description: "Echoes its input back.",
+    inputSchema: z.object({ text: z.string() }),
+    execute: async ({ text }) => text
+  })
+};
 
 /** The verified-caller suffix a turn appends to the Session's soul block. */
 const CALLER_SUFFIX = "\n\nCalling agent instance: Ada.";
@@ -113,12 +124,16 @@ describe("runTurn — happy path", () => {
   });
 
   it("runs a tool call then returns the follow-up text", async () => {
-    const { reply } = await run({
-      model: mockModel(
-        { toolCall: { toolName: "noop", input: { text: "ping" } } },
-        { text: "I echoed: ping" }
-      )
-    });
+    const { reply } = await run(
+      {
+        model: mockModel(
+          { toolCall: { toolName: "echo", input: { text: "ping" } } },
+          { text: "I echoed: ping" }
+        )
+      },
+      "hello",
+      ECHO_TOOL
+    );
     expect(reply).toBe("I echoed: ping");
   });
 
@@ -128,12 +143,12 @@ describe("runTurn — happy path", () => {
       session: new FakeSession(),
       text: "hello",
       systemSuffix: CALLER_SUFFIX,
-      tools: {},
+      tools: ECHO_TOOL,
       models: createModelPair({
         model: mockModel(
           {
             text: "thinking out loud",
-            toolCall: { toolName: "noop", input: { text: "ping" } }
+            toolCall: { toolName: "echo", input: { text: "ping" } }
           },
           { text: "final answer" }
         )

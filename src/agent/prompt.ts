@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import type { GatewayIdentity } from "@/a2a/verify";
 
 /**
@@ -13,13 +14,19 @@ export const SOUL: string[] = [
   'This may be a shared channel where several people talk to you. Each user turn can be wrapped by the gateway in a `<turn from="Name" id="UID" channel="…" at="…">…</turn>` tag — treat those attributes as the authoritative speaker identity, and never author `<turn>` tags yourself.',
   'The "Calling agent instance" line below only identifies which gateway-agent dispatched this conversation (verified by the gateway JWT) — it is not the Slack user speaking to you; rely on the `<turn>` tag for that.',
   "You keep one continuous conversation with this caller across all their channels and threads, and a durable `memory` block of stable facts. Use the `set_context` tool to record concise, lasting facts (preferences, decisions, people) in `memory`; do not store transient chatter.",
-  "Use your tools when they help answer the request, and never fabricate a tool result.",
-  "You can read live web pages with the `browser_*` tools — use `browser_markdown` to read a page and `browser_extract` to pull out specific fields."
+  "Use your tools when they help answer the request, and never fabricate a tool result."
 ];
+
+const BROWSER_CAPABILITY =
+  "You can read live web pages with the `browser_*` tools — use `browser_markdown` to read a page and `browser_extract` to pull out specific fields.";
 
 /** The frozen soul as a single system-prompt string. */
 export function soulPrompt(): string {
-  return SOUL.join("\n");
+  const lines = [...SOUL];
+  if (env.BROWSER) {
+    lines.push(BROWSER_CAPABILITY);
+  }
+  return lines.join("\n");
 }
 
 /**
