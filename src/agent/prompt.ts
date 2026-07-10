@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import type { GatewayIdentity } from "@/a2a/verify";
 
 /**
@@ -16,9 +17,16 @@ export const SOUL: string[] = [
   "Use your tools when they help answer the request, and never fabricate a tool result."
 ];
 
+const BROWSER_CAPABILITY =
+  "You can read live web pages with the `browser_*` tools — use `browser_markdown` to read a page and `browser_extract` to pull out specific fields.";
+
 /** The frozen soul as a single system-prompt string. */
 export function soulPrompt(): string {
-  return SOUL.join("\n");
+  const lines = [...SOUL];
+  if (env.BROWSER) {
+    lines.push(BROWSER_CAPABILITY);
+  }
+  return lines.join("\n");
 }
 
 /**

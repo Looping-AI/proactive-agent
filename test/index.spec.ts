@@ -24,6 +24,7 @@ const TEST_ENV: Env = {
   A2A_SIGNING_KEY: JSON.stringify(TEST_AGENT_PRIVATE_JWK),
   GATEWAY_ORIGINS: JSON.stringify([GATEWAY_ORIGIN]),
   AI: undefined as unknown as Ai,
+  BROWSER: undefined as unknown as BrowserRun,
   ProactiveAgent:
     undefined as unknown as DurableObjectNamespace<ProactiveAgent>,
   VECTORIZE: undefined as unknown as VectorizeIndex,

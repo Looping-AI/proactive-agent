@@ -6,7 +6,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "looping-proactive-agent",
   "main": "src/index.ts",
-  "compatibility_date": "2026-03-02",
+  "compatibility_date": "2026-07-06",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
@@ -18,6 +18,15 @@
   // this and keeps the suite from eagerly opening that remote connection.
   "ai": {
     "binding": "AI",
+    "remote": true
+  },
+  // Browser Rendering — backs the agent's web read/scrape tools (Quick Actions:
+  // browser_markdown/extract/links/scrape). `remote: true` mirrors AI/VECTORIZE
+  // (no local mode) and is required for Quick Actions under `wrangler dev`; the
+  // pool-level `remoteBindings: false` still keeps tests off the real connection.
+  // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free tier.
+  "browser": {
+    "binding": "BROWSER",
     "remote": true
   },
   // The agent runtime is a Durable Object (Agents-SDK `Agent`): one instance per
