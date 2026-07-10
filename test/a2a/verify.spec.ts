@@ -73,12 +73,23 @@ const OPTS = {
 describe("normalizeGatewayOrigins", () => {
   it("canonicalizes trailing slashes and insecure or omitted schemes to HTTPS", () => {
     expect(
-      normalizeGatewayOrigins([
-        "https://gateway.test/",
-        "http://gateway.test",
-        "gateway.test"
-      ])
+      normalizeGatewayOrigins(["https://gateway.test/", "http://gateway.test", "gateway.test"])
     ).toEqual([GATEWAY_ORIGIN, GATEWAY_ORIGIN, GATEWAY_ORIGIN]);
+  });
+
+  it("lets verifyGatewayToken accept hostname/http variants in allowedOrigins", async () => {
+    const token = await makeGatewayToken();
+
+    await expect(
+      verifyGatewayToken(token, { ...OPTS, allowedOrigins: ["gateway.test"] })
+    ).resolves.toBeTruthy();
+
+    await expect(
+      verifyGatewayToken(token, {
+        ...OPTS,
+        allowedOrigins: ["http://gateway.test/"]
+      })
+    ).resolves.toBeTruthy();
   });
 });
 
