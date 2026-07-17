@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { SOUL, callerContext, soulPrompt } from "@/agent/prompt";
+import {
+  SILENCE_GUIDANCE,
+  SOUL,
+  callerContext,
+  soulPrompt
+} from "@/agent/prompt";
 
 describe("SOUL", () => {
   it("includes the <turn> provenance awareness rule", () => {
@@ -40,5 +45,21 @@ describe("soulPrompt", () => {
     const p = soulPrompt();
     expect(p.startsWith(SOUL[0])).toBe(true);
     expect(p).toContain(SOUL[SOUL.length - 1]);
+  });
+
+  it("leaves the silence guidance out of the frozen soul", () => {
+    // The loop appends it on the first step only: from the second step on the
+    // tool is withdrawn, so a permanent mention would tempt a call that does
+    // nothing and burns a step.
+    expect(soulPrompt()).not.toContain("Staying silent is the right default");
+    expect(SOUL.some((line) => line.includes("silence"))).toBe(false);
+  });
+});
+
+describe("SILENCE_GUIDANCE", () => {
+  it("names the tool and the rules the loop actually enforces", () => {
+    expect(SILENCE_GUIDANCE).toContain("`silence`");
+    expect(SILENCE_GUIDANCE).toContain("only tool call");
+    expect(SILENCE_GUIDANCE).toContain("first action");
   });
 });

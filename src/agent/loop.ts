@@ -1,4 +1,10 @@
-import type { FinishReason, StepResult, ToolSet } from "ai";
+import type {
+  FinishReason,
+  PrepareStepFunction,
+  StepResult,
+  StopCondition,
+  ToolSet
+} from "ai";
 import { generateText, stepCountIs } from "ai";
 import type { ModelPair } from "./model";
 import { MAX_STEPS } from "@/config";
@@ -7,10 +13,46 @@ import {
   toModelMessages,
   userSessionMessage
 } from "./history";
+import { SILENCE_GUIDANCE } from "./prompt";
+import { SILENCE_TOOL_NAME } from "./tools";
 import type { SessionLike } from "./session";
 
 export const TRANSIENT_REPLY =
   "The AI service is temporarily unavailable. Please try again in a moment.";
+
+/**
+ * How a turn ended: with a reply to deliver, or with the agent deliberately
+ * declining to answer (the model's first move was the `silence` tool). Distinct
+ * from an empty reply, which means the model failed and yields
+ * {@link TRANSIENT_REPLY}.
+ */
+export type TurnOutcome = { kind: "reply"; text: string } | { kind: "silent" };
+
+/** The only part of a `StepResult` the silence predicates read. */
+type ToolCallingStep = { toolCalls: ReadonlyArray<{ toolName: string }> };
+
+/** A step whose one and only tool call is `silence`. Any text alongside it is irrelevant. */
+export function isSilenceOnlyStep(step: ToolCallingStep): boolean {
+  return (
+    step.toolCalls.length === 1 &&
+    step.toolCalls[0].toolName === SILENCE_TOOL_NAME
+  );
+}
+
+/**
+ * Whether a run was a silent turn: **exactly one step**, whose only tool call was
+ * `silence`. Everything else — `silence` alongside a real tool, or `silence` on a
+ * later step — is ignored, and the turn produces a normal reply.
+ *
+ * The `length === 1` guard is what enforces "first step only" at *runtime*.
+ * `activeTools` (below) merely hides the tool from the model; the SDK still
+ * resolves a tool call against the full, unfiltered map, so a model that names
+ * `silence` on a later step executes it happily. Without this guard such a call
+ * would silently discard a turn that had already done real work.
+ */
+export function isSilentTurn(steps: readonly ToolCallingStep[]): boolean {
+  return steps.length === 1 && isSilenceOnlyStep(steps[0]);
+}
 
 /** Whether an error is a transient Workers-AI capacity/timeout condition. */
 export function isTransientAiError(err: unknown): boolean {
@@ -67,6 +109,12 @@ function buildIntermediateContentHandler(
   return async (step) => {
     const i = stepIndex++;
     if (!isIntermediateStep(step)) return;
+    // A first-step `silence` call ends the turn with no reply, so text the model
+    // wrote alongside it must not leak out as a `working` push. This is the only
+    // place it can be caught: the SDK fires `onStepFinish` *before* it evaluates
+    // `stopWhen`. Gated to step 0 because a `silence` call on any later step is
+    // ignored (see `isSilentTurn`), making its text genuine intermediate content.
+    if (i === 0 && isSilenceOnlyStep(step)) return;
     const content = step.text.trim();
     if (content) await onContent(content, i);
   };
@@ -79,11 +127,16 @@ function buildIntermediateContentHandler(
  * return the final reply text. The inbound text keeps its `<turn>` provenance
  * wrapper verbatim for the model (and Phase-3 recall) to read.
  *
+ * May instead resolve to `{ kind: "silent" }`: the agent sees every channel
+ * message, so its first move can be the `silence` tool, ending the turn with no
+ * reply. The user message is still appended either way — the agent reads the
+ * channel whether or not it answers.
+ *
  * **Never throws**: a transient (capacity/timeout) failure resolves to a
  * friendly "try again" message, an unexpected failure to `unexpectedReply`, so
- * the DO's `converse()` caller always gets a string to publish.
+ * the DO's `converse()` caller always gets an outcome to publish.
  */
-export async function runTurn(args: RunTurnArgs): Promise<string> {
+export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
   const {
     session,
     text,
@@ -99,12 +152,35 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
     const history = await session.getHistory();
     const system = (await session.refreshSystemPrompt()) + systemSuffix;
     const tools = { ...(await session.tools()), ...extraTools };
+    const withoutSilence = Object.keys(tools).filter(
+      (name) => name !== SILENCE_TOOL_NAME
+    );
+
+    // Stop as soon as the model declines to answer — otherwise the SDK would
+    // feed the (meaningless) `silence` result back and spend another step. The
+    // two conditions are OR'd and disjoint: `stepCountIs` fires at MAX_STEPS,
+    // `isSilentTurn` only ever at one step. Not `hasToolCall("silence")`, which
+    // would also stop on a `silence` call we mean to ignore.
+    const stopWhen: Array<StopCondition<ToolSet>> = [
+      stepCountIs(MAX_STEPS),
+      ({ steps }) => isSilentTurn(steps)
+    ];
+
+    // `silence` is a first-move-only escape hatch: once the model has committed
+    // to real work it must finish the turn with a reply. So step 0 sees the full
+    // toolset and the guidance explaining it; later steps see neither. (Omitting
+    // a field here falls back to the outer `generateArgs` value.)
+    const prepareStep: PrepareStepFunction<ToolSet> = ({ stepNumber }) =>
+      stepNumber === 0
+        ? { system: system + SILENCE_GUIDANCE }
+        : { activeTools: withoutSilence };
 
     const generateArgs = {
       system,
       messages: toModelMessages(history),
       tools,
-      stopWhen: stepCountIs(MAX_STEPS),
+      stopWhen,
+      prepareStep,
       // We do our own primary → fallback recovery below, so disable the SDK's
       // per-model exponential-backoff retries — they'd only add latency on a
       // hard failure and duplicate our fallback.
@@ -126,6 +202,11 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
           : undefined
       });
     } catch (primaryErr) {
+      // The fallback re-runs the whole turn, so `prepareStep`'s stepNumber
+      // restarts at 0 and the fallback model gets its own shot at `silence` —
+      // which is what we want. Rare consequence: if the primary streamed a
+      // `working` push and *then* threw, and the fallback opens with `silence`,
+      // the gateway keeps that intermediate message and never gets a final one.
       console.warn(
         "[agent-loop] AI error on primary model, retrying with fallback",
         { model: modelId, error: String(primaryErr) }
@@ -138,6 +219,17 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
           ? buildIntermediateContentHandler(onContent)
           : undefined
       });
+    }
+
+    // Before the empty-text check below, which a silent turn would otherwise
+    // trip: its step is `finishReason:"tool-calls"` with (usually) no text, and
+    // would be reported to the caller as a model failure. Reading the outcome
+    // off `result.steps` rather than trusting `stopWhen` also covers the case of
+    // an invalid `silence` call, which exits the loop without consulting it.
+    // Any text the model wrote alongside the call is discarded here, unread.
+    if (isSilentTurn(result.steps)) {
+      console.log("[agent-loop] silent turn — no reply", { model: modelId });
+      return { kind: "silent" };
     }
 
     const replyText = result.text.trim();
@@ -155,17 +247,20 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
           finishReason
         });
       }
-      return TRANSIENT_REPLY;
+      return { kind: "reply", text: TRANSIENT_REPLY };
     }
 
     await session.appendMessage(assistantSessionMessage(replyText));
-    return replyText;
+    return { kind: "reply", text: replyText };
   } catch (err) {
     console.error("[agent-loop] turn failed", {
       model: modelId,
       err: String(err),
       stack: err instanceof Error ? err.stack : undefined
     });
-    return isTransientAiError(err) ? TRANSIENT_REPLY : args.unexpectedReply;
+    return {
+      kind: "reply",
+      text: isTransientAiError(err) ? TRANSIENT_REPLY : args.unexpectedReply
+    };
   }
 }

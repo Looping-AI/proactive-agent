@@ -3,11 +3,17 @@ import { z } from "zod";
 import { tool } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import type { SessionMessage } from "agents/experimental/memory/session";
-import { runTurn, TRANSIENT_REPLY } from "@/agent/loop";
+import {
+  isSilenceOnlyStep,
+  isSilentTurn,
+  runTurn,
+  TRANSIENT_REPLY
+} from "@/agent/loop";
 import { createModelPair, type ModelPair } from "@/agent/model";
 import type { SessionLike } from "@/agent/session";
 import { sessionText } from "@/agent/history";
-import { mockModel } from "./mock-model";
+import { SILENCE_TOOL_NAME, silenceTool } from "@/agent/tools";
+import { mockModel, recordCalls } from "./mock-model";
 
 /** Minimal real tool used to exercise the multi-step tool-call loop. */
 const ECHO_TOOL: ToolSet = {
@@ -17,6 +23,17 @@ const ECHO_TOOL: ToolSet = {
     execute: async ({ text }) => text
   })
 };
+
+/** The real `silence` tool alongside `echo` — the production pairing. */
+const SILENCE_AND_ECHO: ToolSet = {
+  ...ECHO_TOOL,
+  [SILENCE_TOOL_NAME]: silenceTool
+};
+
+/** A step shaped just enough for the silence predicates. */
+const step = (...toolNames: string[]) => ({
+  toolCalls: toolNames.map((toolName) => ({ toolName }))
+});
 
 /** The verified-caller suffix a turn appends to the Session's soul block. */
 const CALLER_SUFFIX = "\n\nCalling agent instance: Ada.";
@@ -60,7 +77,7 @@ function run(
     tools: extraTools,
     models: createModelPair(models),
     unexpectedReply: UNEXPECTED_REPLY
-  }).then((reply) => ({ reply, session }));
+  }).then((outcome) => ({ outcome, session }));
 }
 
 /**
@@ -96,8 +113,8 @@ function runPair(models: ModelPair, text = "hello") {
 
 describe("runTurn — happy path", () => {
   it("returns the model's reply text", async () => {
-    const { reply } = await run({ model: mockModel({ text: "Hi Ada!" }) });
-    expect(reply).toBe("Hi Ada!");
+    const { outcome } = await run({ model: mockModel({ text: "Hi Ada!" }) });
+    expect(outcome).toEqual({ kind: "reply", text: "Hi Ada!" });
   });
 
   it("persists the user turn and the assistant reply to the session", async () => {
@@ -124,7 +141,7 @@ describe("runTurn — happy path", () => {
   });
 
   it("runs a tool call then returns the follow-up text", async () => {
-    const { reply } = await run(
+    const { outcome } = await run(
       {
         model: mockModel(
           { toolCall: { toolName: "echo", input: { text: "ping" } } },
@@ -134,12 +151,12 @@ describe("runTurn — happy path", () => {
       "hello",
       ECHO_TOOL
     );
-    expect(reply).toBe("I echoed: ping");
+    expect(outcome).toEqual({ kind: "reply", text: "I echoed: ping" });
   });
 
   it("streams intermediate content (text on a tool-call step) via onContent, not the final reply", async () => {
     const streamed: Array<{ text: string; index: number }> = [];
-    const reply = await runTurn({
+    const outcome = await runTurn({
       session: new FakeSession(),
       text: "hello",
       systemSuffix: CALLER_SUFFIX,
@@ -158,14 +175,14 @@ describe("runTurn — happy path", () => {
         streamed.push({ text, index });
       }
     });
-    expect(reply).toBe("final answer");
+    expect(outcome).toEqual({ kind: "reply", text: "final answer" });
     // The intermediate content streamed once (step 0); the final reply did not.
     expect(streamed).toEqual([{ text: "thinking out loud", index: 0 }]);
   });
 
   it("does not stream when the turn is a single content reply (no tool call)", async () => {
     const streamed: string[] = [];
-    const reply = await runTurn({
+    const outcome = await runTurn({
       session: new FakeSession(),
       text: "hello",
       systemSuffix: CALLER_SUFFIX,
@@ -176,14 +193,14 @@ describe("runTurn — happy path", () => {
         streamed.push(text);
       }
     });
-    expect(reply).toBe("just this");
+    expect(outcome).toEqual({ kind: "reply", text: "just this" });
     expect(streamed).toEqual([]);
   });
 });
 
 describe("runTurn — resilience", () => {
   it("falls back to the secondary model when the primary throws", async () => {
-    const reply = await runPair(
+    const outcome = await runPair(
       modelPair(
         () => {
           throw new Error("primary boom");
@@ -191,11 +208,11 @@ describe("runTurn — resilience", () => {
         () => mockModel({ text: "from fallback" })
       )
     );
-    expect(reply).toBe("from fallback");
+    expect(outcome).toEqual({ kind: "reply", text: "from fallback" });
   });
 
   it("returns the transient message when both models are over capacity", async () => {
-    const reply = await runPair(
+    const outcome = await runPair(
       modelPair(
         () => {
           throw new Error("capacity temporarily exceeded");
@@ -205,16 +222,16 @@ describe("runTurn — resilience", () => {
         }
       )
     );
-    expect(reply).toBe(TRANSIENT_REPLY);
+    expect(outcome).toEqual({ kind: "reply", text: TRANSIENT_REPLY });
   });
 
   it("returns the transient message when the model returns empty text", async () => {
-    const { reply } = await run({ model: mockModel({ text: "" }) });
-    expect(reply).toBe(TRANSIENT_REPLY);
+    const { outcome } = await run({ model: mockModel({ text: "" }) });
+    expect(outcome).toEqual({ kind: "reply", text: TRANSIENT_REPLY });
   });
 
   it("returns the unexpected-error reply on a non-transient failure", async () => {
-    const reply = await runPair(
+    const outcome = await runPair(
       modelPair(
         () => {
           throw new Error("kaboom");
@@ -224,7 +241,125 @@ describe("runTurn — resilience", () => {
         }
       )
     );
-    expect(reply).not.toBe(TRANSIENT_REPLY);
-    expect(reply).toBe(UNEXPECTED_REPLY);
+    expect(outcome).toEqual({ kind: "reply", text: UNEXPECTED_REPLY });
+  });
+});
+
+describe("isSilenceOnlyStep", () => {
+  it("is true only for a lone silence call", () => {
+    expect(isSilenceOnlyStep(step(SILENCE_TOOL_NAME))).toBe(true);
+    expect(isSilenceOnlyStep(step(SILENCE_TOOL_NAME, "echo"))).toBe(false);
+    expect(isSilenceOnlyStep(step("echo"))).toBe(false);
+    expect(isSilenceOnlyStep(step())).toBe(false);
+  });
+});
+
+describe("isSilentTurn", () => {
+  it("is true for a single step that only called silence", () => {
+    expect(isSilentTurn([step(SILENCE_TOOL_NAME)])).toBe(true);
+  });
+
+  it("is false once the turn has done real work", () => {
+    // The guard that `activeTools` alone cannot provide: the SDK resolves tool
+    // calls against the unfiltered map, so a model naming `silence` on a later
+    // step still executes it. It must not discard a turn already underway.
+    expect(isSilentTurn([step("echo"), step(SILENCE_TOOL_NAME)])).toBe(false);
+  });
+
+  it("is false for a mixed call, a plain tool call, and no steps", () => {
+    expect(isSilentTurn([step(SILENCE_TOOL_NAME, "echo")])).toBe(false);
+    expect(isSilentTurn([step("echo")])).toBe(false);
+    expect(isSilentTurn([])).toBe(false);
+  });
+});
+
+describe("runTurn — silence", () => {
+  it("returns a silent outcome when the model's first move is silence", async () => {
+    const { outcome, session } = await run(
+      { model: mockModel({ toolCall: { toolName: SILENCE_TOOL_NAME } }) },
+      "lol same",
+      SILENCE_AND_ECHO
+    );
+    expect(outcome).toEqual({ kind: "silent" });
+    // The agent read the channel but did not answer: user turn kept, no reply.
+    expect(session.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(sessionText(session.messages[0])).toBe("lol same");
+  });
+
+  it("discards text written alongside a lone silence call, and never streams it", async () => {
+    const streamed: string[] = [];
+    const outcome = await runTurn({
+      session: new FakeSession(),
+      text: "hello",
+      systemSuffix: CALLER_SUFFIX,
+      tools: SILENCE_AND_ECHO,
+      models: createModelPair({
+        model: mockModel({
+          text: "this must never reach Slack",
+          toolCall: { toolName: SILENCE_TOOL_NAME }
+        })
+      }),
+      unexpectedReply: UNEXPECTED_REPLY,
+      onContent: (text) => {
+        streamed.push(text);
+      }
+    });
+    expect(outcome).toEqual({ kind: "silent" });
+    expect(streamed).toEqual([]);
+  });
+
+  it("ignores silence called alongside another tool and replies normally", async () => {
+    const { model, calls } = recordCalls(
+      mockModel(
+        {
+          toolCalls: [
+            { toolName: SILENCE_TOOL_NAME },
+            { toolName: "echo", input: { text: "ping" } }
+          ]
+        },
+        { text: "I echoed: ping" }
+      )
+    );
+    const { outcome } = await run({ model }, "hello", SILENCE_AND_ECHO);
+    expect(outcome).toEqual({ kind: "reply", text: "I echoed: ping" });
+    // The loop continued rather than halting on the unhonoured silence call.
+    expect(calls).toHaveLength(2);
+  });
+
+  it("ignores a silence call made after the turn has done real work", async () => {
+    const { outcome } = await run(
+      {
+        model: mockModel(
+          { toolCall: { toolName: "echo", input: { text: "ping" } } },
+          { toolCall: { toolName: SILENCE_TOOL_NAME } },
+          { text: "done" }
+        )
+      },
+      "hello",
+      SILENCE_AND_ECHO
+    );
+    expect(outcome).toEqual({ kind: "reply", text: "done" });
+  });
+
+  it("offers silence and its guidance on the first step only", async () => {
+    const { model, calls } = recordCalls(
+      mockModel(
+        { toolCall: { toolName: "echo", input: { text: "ping" } } },
+        { text: "done" }
+      )
+    );
+    await run({ model }, "hello", SILENCE_AND_ECHO);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].tools).toContain(SILENCE_TOOL_NAME);
+    expect(calls[0].prompt).toContain("Staying silent is the right default");
+
+    // Once the model has committed to real work, the escape hatch is withdrawn —
+    // tool and guidance both — but every other tool stays.
+    expect(calls[1].tools).not.toContain(SILENCE_TOOL_NAME);
+    expect(calls[1].tools).toContain("echo");
+    expect(calls[1].prompt).not.toContain(
+      "Staying silent is the right default"
+    );
   });
 });

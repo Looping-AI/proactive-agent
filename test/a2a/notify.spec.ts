@@ -4,6 +4,7 @@ import type { Task } from "@a2a-js/sdk";
 import {
   buildSubmittedTask,
   buildCompletedTask,
+  buildSilentCompletedTask,
   buildWorkingTask,
   signCallbackJwt,
   postNotification,
@@ -50,6 +51,25 @@ describe("buildCompletedTask", () => {
     const b = buildCompletedTask("task-1", "ctx-1", "the answer");
     expect(a.status.message?.messageId).toBe("task-1:final");
     expect(b.status.message?.messageId).toBe("task-1:final");
+  });
+});
+
+describe("buildSilentCompletedTask", () => {
+  it("is a completed Task with no message at all (nothing for the gateway to post)", () => {
+    const task = buildSilentCompletedTask("task-1", "ctx-1");
+    expect(task.kind).toBe("task");
+    expect(task.id).toBe("task-1");
+    expect(task.contextId).toBe("ctx-1");
+    expect(task.status.state).toBe("completed");
+    expect(task.status.message).toBeUndefined();
+  });
+
+  it("survives the JSON round-trip to the gateway with no message key", () => {
+    const wire = JSON.parse(
+      JSON.stringify(buildSilentCompletedTask("task-1", "ctx-1"))
+    ) as Task;
+    expect(wire.status.state).toBe("completed");
+    expect("message" in wire.status).toBe(false);
   });
 });
 

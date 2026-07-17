@@ -18,7 +18,8 @@ interface StubCapture {
   working?: string;
   converse?: { text: string; identity: unknown; push: unknown };
   completed?: { task: Task };
-  reply: string;
+  /** What `converse` resolves to — `null` means the agent stayed silent. */
+  reply: string | null;
   currentState?: Task["status"]["state"];
 }
 
@@ -129,6 +130,42 @@ describe("NotifyTaskWorkflow", () => {
       kind: "text",
       text: "the answer"
     });
+  });
+
+  it("POSTs a completed Task with no message when the agent stays silent", async () => {
+    const cap: StubCapture = { reply: null };
+    mockAgent(cap);
+
+    const captured: { init?: RequestInit } = {};
+    const fetchSpy = vi.fn(async (_url: string, init?: RequestInit) => {
+      captured.init = init;
+      return new Response("ok", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await runNotifyTask(params(), inlineStep);
+
+    // The callback still fires — the gateway's pending row has to resolve. It
+    // just carries nothing to post to Slack.
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(cap.completed?.task.status.state).toBe("completed");
+    expect(cap.completed?.task.status.message).toBeUndefined();
+
+    const headers = new Headers(captured.init?.headers);
+    expect(headers.get("x-a2a-notification-token")).toBe("tok-xyz");
+    const bearer =
+      headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    await expect(
+      jwtVerify(bearer, await agentPublicKey(), {
+        audience: PUSH_URL,
+        algorithms: ["EdDSA"]
+      })
+    ).resolves.toBeDefined();
+
+    const body = JSON.parse(captured.init?.body as string) as Task;
+    expect(body.id).toBe("task-1");
+    expect(body.status.state).toBe("completed");
+    expect(body.status.message).toBeUndefined();
   });
 
   it("skips the callback when the task was canceled before completion", async () => {
