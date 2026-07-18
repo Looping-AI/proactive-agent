@@ -25,7 +25,7 @@ export interface MockStep {
   text?: string;
   /** Emit one tool call (finishReason "tool-calls"); may accompany `text`. */
   toolCall?: MockToolCall;
-  /** Emit several tool calls in one step (e.g. `silence` beside a real tool). */
+  /** Emit several tool calls in one step (e.g. `no_reply` beside a real tool). */
   toolCalls?: MockToolCall[];
 }
 

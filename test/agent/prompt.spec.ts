@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  SILENCE_GUIDANCE,
+  NO_REPLY_GUIDANCE,
   SOUL,
   callerContext,
   soulPrompt
@@ -47,19 +47,19 @@ describe("soulPrompt", () => {
     expect(p).toContain(SOUL[SOUL.length - 1]);
   });
 
-  it("leaves the silence guidance out of the frozen soul", () => {
-    // The loop appends it on the first step only: from the second step on the
-    // tool is withdrawn, so a permanent mention would tempt a call that does
-    // nothing and burns a step.
+  it("leaves the no_reply guidance out of the frozen soul", () => {
+    // The loop appends it only until the agent has spoken; once it streams
+    // content the tool is withdrawn, so a permanent mention would tempt a call
+    // that does nothing and burns a step.
     expect(soulPrompt()).not.toContain("Staying silent is the right default");
-    expect(SOUL.some((line) => line.includes("silence"))).toBe(false);
+    expect(SOUL.some((line) => line.includes("no_reply"))).toBe(false);
   });
 });
 
-describe("SILENCE_GUIDANCE", () => {
+describe("NO_REPLY_GUIDANCE", () => {
   it("names the tool and the rules the loop actually enforces", () => {
-    expect(SILENCE_GUIDANCE).toContain("`silence`");
-    expect(SILENCE_GUIDANCE).toContain("only tool call");
-    expect(SILENCE_GUIDANCE).toContain("first action");
+    expect(NO_REPLY_GUIDANCE).toContain("`no_reply`");
+    expect(NO_REPLY_GUIDANCE).toContain("ends your turn");
+    expect(NO_REPLY_GUIDANCE).toContain("once you have already sent something");
   });
 });

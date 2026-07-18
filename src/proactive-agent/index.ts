@@ -124,10 +124,10 @@ export class ProactiveAgent extends Agent<Env> {
 
   /**
    * Answer one turn for this caller and return the reply text, or **`null` when
-   * the agent deliberately chose not to reply** — the model's first move was the
-   * `silence` tool (see {@link file://../agent/loop.ts}). The workflow turns that
-   * into a `completed` Task carrying no message. Runs the Workers-AI tool loop
-   * over the continuous Session (append → generate → persist).
+   * the agent deliberately chose not to reply** — it called the `no_reply` tool
+   * (see {@link file://../agent/loop.ts}). The workflow turns that into a
+   * `completed` Task carrying no message. Runs the Workers-AI tool loop over the
+   * continuous Session (append → generate → persist).
    *
    * The loop's richer {@link TurnOutcome} union is collapsed to `string | null`
    * here on purpose, and should stay collapsed: DO RPC intersects every *object*
@@ -174,7 +174,7 @@ export class ProactiveAgent extends Agent<Env> {
       unexpectedReply: UNEXPECTED_REPLY,
       onContent: push ? this.streamWorking(push) : undefined
     });
-    return outcome.kind === "silent" ? null : outcome.text;
+    return outcome.kind === "no_reply" ? null : outcome.text;
   }
 
   /**

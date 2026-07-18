@@ -63,8 +63,8 @@ export function buildSubmittedTask(
 
 /**
  * The terminal `completed` Task for a turn the agent deliberately did not answer
- * (its first move was the `silence` tool — see {@link file://../agent/loop.ts}).
- * Same shape as {@link buildSubmittedTask}: **no `status.message` at all**.
+ * (it called the `no_reply` tool — see {@link file://../agent/loop.ts}). Same
+ * shape as {@link buildSubmittedTask}: **no `status.message` at all**.
  *
  * The callback is still POSTed. The gateway's pending row has to resolve — we
  * simply hand it nothing to post to Slack. There is no `messageId` because there
@@ -72,7 +72,7 @@ export function buildSubmittedTask(
  * for the gateway to dedupe on: a `notify`-step retry re-delivers no content and
  * is idempotent by construction.
  */
-export function buildSilentCompletedTask(
+export function buildNoReplyCompletedTask(
   taskId: string,
   contextId: string
 ): PlainTask {

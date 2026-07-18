@@ -4,15 +4,15 @@ import { tool } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import type { SessionMessage } from "agents/experimental/memory/session";
 import {
-  isSilenceOnlyStep,
-  isSilentTurn,
+  stepCallsNoReply,
+  isNoReplyTurn,
   runTurn,
   TRANSIENT_REPLY
 } from "@/agent/loop";
 import { createModelPair, type ModelPair } from "@/agent/model";
 import type { SessionLike } from "@/agent/session";
 import { sessionText } from "@/agent/history";
-import { SILENCE_TOOL_NAME, silenceTool } from "@/agent/tools";
+import { NO_REPLY_TOOL_NAME, noReplyTool } from "@/agent/tools";
 import { mockModel, recordCalls } from "./mock-model";
 
 /** Minimal real tool used to exercise the multi-step tool-call loop. */
@@ -24,13 +24,13 @@ const ECHO_TOOL: ToolSet = {
   })
 };
 
-/** The real `silence` tool alongside `echo` — the production pairing. */
-const SILENCE_AND_ECHO: ToolSet = {
+/** The real `no_reply` tool alongside `echo` — the production pairing. */
+const NO_REPLY_AND_ECHO: ToolSet = {
   ...ECHO_TOOL,
-  [SILENCE_TOOL_NAME]: silenceTool
+  [NO_REPLY_TOOL_NAME]: noReplyTool
 };
 
-/** A step shaped just enough for the silence predicates. */
+/** A step shaped just enough for the no-reply predicates. */
 const step = (...toolNames: string[]) => ({
   toolCalls: toolNames.map((toolName) => ({ toolName }))
 });
@@ -245,58 +245,85 @@ describe("runTurn — resilience", () => {
   });
 });
 
-describe("isSilenceOnlyStep", () => {
-  it("is true only for a lone silence call", () => {
-    expect(isSilenceOnlyStep(step(SILENCE_TOOL_NAME))).toBe(true);
-    expect(isSilenceOnlyStep(step(SILENCE_TOOL_NAME, "echo"))).toBe(false);
-    expect(isSilenceOnlyStep(step("echo"))).toBe(false);
-    expect(isSilenceOnlyStep(step())).toBe(false);
+describe("stepCallsNoReply", () => {
+  it("is true whenever the step calls no_reply, alone or alongside another tool", () => {
+    expect(stepCallsNoReply(step(NO_REPLY_TOOL_NAME))).toBe(true);
+    expect(stepCallsNoReply(step(NO_REPLY_TOOL_NAME, "echo"))).toBe(true);
+    expect(stepCallsNoReply(step("echo"))).toBe(false);
+    expect(stepCallsNoReply(step())).toBe(false);
   });
 });
 
-describe("isSilentTurn", () => {
-  it("is true for a single step that only called silence", () => {
-    expect(isSilentTurn([step(SILENCE_TOOL_NAME)])).toBe(true);
+describe("isNoReplyTurn", () => {
+  it("is true for a final step that calls no_reply when nothing was said", () => {
+    expect(isNoReplyTurn(false, [step(NO_REPLY_TOOL_NAME)])).toBe(true);
   });
 
-  it("is false once the turn has done real work", () => {
-    // The guard that `activeTools` alone cannot provide: the SDK resolves tool
-    // calls against the unfiltered map, so a model naming `silence` on a later
-    // step still executes it. It must not discard a turn already underway.
-    expect(isSilentTurn([step("echo"), step(SILENCE_TOOL_NAME)])).toBe(false);
-  });
-
-  it("is false for a mixed call, a plain tool call, and no steps", () => {
-    expect(isSilentTurn([step(SILENCE_TOOL_NAME, "echo")])).toBe(false);
-    expect(isSilentTurn([step("echo")])).toBe(false);
-    expect(isSilentTurn([])).toBe(false);
-  });
-});
-
-describe("runTurn — silence", () => {
-  it("returns a silent outcome when the model's first move is silence", async () => {
-    const { outcome, session } = await run(
-      { model: mockModel({ toolCall: { toolName: SILENCE_TOOL_NAME } }) },
-      "lol same",
-      SILENCE_AND_ECHO
+  it("is true for a late no_reply after silent tool work (the softening)", () => {
+    // The whole point: browse (or otherwise act) without speaking, then conclude
+    // there's nothing to add. Allowed as long as nothing streamed.
+    expect(isNoReplyTurn(false, [step("echo"), step(NO_REPLY_TOOL_NAME)])).toBe(
+      true
     );
-    expect(outcome).toEqual({ kind: "silent" });
+  });
+
+  it("is true even when no_reply shares its step with another tool", () => {
+    // The step's other tool ran, but a no_reply call concludes the turn — no
+    // "must be your only call" requirement.
+    expect(isNoReplyTurn(false, [step(NO_REPLY_TOOL_NAME, "echo")])).toBe(true);
+  });
+
+  it("is false once the agent has spoken this turn", () => {
+    // `activeTools` only hides the tool; the SDK resolves a hallucinated call
+    // against the unfiltered map. `repliedAny` is the guard that a no_reply after
+    // streaming content must not discard a turn Slack has already seen.
+    expect(isNoReplyTurn(true, [step(NO_REPLY_TOOL_NAME)])).toBe(false);
+  });
+
+  it("is false for a plain tool call and no steps", () => {
+    expect(isNoReplyTurn(false, [step("echo")])).toBe(false);
+    expect(isNoReplyTurn(false, [])).toBe(false);
+  });
+});
+
+describe("runTurn — no_reply", () => {
+  it("declines when the model's first move is no_reply", async () => {
+    const { outcome, session } = await run(
+      { model: mockModel({ toolCall: { toolName: NO_REPLY_TOOL_NAME } }) },
+      "lol same",
+      NO_REPLY_AND_ECHO
+    );
+    expect(outcome).toEqual({ kind: "no_reply" });
     // The agent read the channel but did not answer: user turn kept, no reply.
     expect(session.messages.map((m) => m.role)).toEqual(["user"]);
     expect(sessionText(session.messages[0])).toBe("lol same");
   });
 
-  it("discards text written alongside a lone silence call, and never streams it", async () => {
+  it("declines after silent tool work — browse, then conclude nothing to add", async () => {
+    const { outcome } = await run(
+      {
+        model: mockModel(
+          { toolCall: { toolName: "echo", input: { text: "look" } } },
+          { toolCall: { toolName: NO_REPLY_TOOL_NAME } }
+        )
+      },
+      "did anyone try the staging URL?",
+      NO_REPLY_AND_ECHO
+    );
+    expect(outcome).toEqual({ kind: "no_reply" });
+  });
+
+  it("discards text written alongside a lone no_reply call, and never streams it", async () => {
     const streamed: string[] = [];
     const outcome = await runTurn({
       session: new FakeSession(),
       text: "hello",
       systemSuffix: CALLER_SUFFIX,
-      tools: SILENCE_AND_ECHO,
+      tools: NO_REPLY_AND_ECHO,
       models: createModelPair({
         model: mockModel({
           text: "this must never reach Slack",
-          toolCall: { toolName: SILENCE_TOOL_NAME }
+          toolCall: { toolName: NO_REPLY_TOOL_NAME }
         })
       }),
       unexpectedReply: UNEXPECTED_REPLY,
@@ -304,62 +331,127 @@ describe("runTurn — silence", () => {
         streamed.push(text);
       }
     });
-    expect(outcome).toEqual({ kind: "silent" });
+    expect(outcome).toEqual({ kind: "no_reply" });
     expect(streamed).toEqual([]);
   });
 
-  it("ignores silence called alongside another tool and replies normally", async () => {
+  it("concludes on no_reply even when another tool shares the step", async () => {
     const { model, calls } = recordCalls(
       mockModel(
         {
           toolCalls: [
-            { toolName: SILENCE_TOOL_NAME },
+            { toolName: NO_REPLY_TOOL_NAME },
             { toolName: "echo", input: { text: "ping" } }
           ]
         },
         { text: "I echoed: ping" }
       )
     );
-    const { outcome } = await run({ model }, "hello", SILENCE_AND_ECHO);
-    expect(outcome).toEqual({ kind: "reply", text: "I echoed: ping" });
-    // The loop continued rather than halting on the unhonoured silence call.
-    expect(calls).toHaveLength(2);
+    const { outcome } = await run({ model }, "hello", NO_REPLY_AND_ECHO);
+    // The no_reply call ends the turn — echo ran but its result is discarded, and
+    // the follow-up reply step is never reached.
+    expect(outcome).toEqual({ kind: "no_reply" });
+    expect(calls).toHaveLength(1);
   });
 
-  it("ignores a silence call made after the turn has done real work", async () => {
-    const { outcome } = await run(
-      {
-        model: mockModel(
-          { toolCall: { toolName: "echo", input: { text: "ping" } } },
-          { toolCall: { toolName: SILENCE_TOOL_NAME } },
-          { text: "done" }
-        )
-      },
-      "hello",
-      SILENCE_AND_ECHO
-    );
-    expect(outcome).toEqual({ kind: "reply", text: "done" });
-  });
-
-  it("offers silence and its guidance on the first step only", async () => {
+  it("withdraws no_reply once the agent has streamed content, forcing a reply", async () => {
     const { model, calls } = recordCalls(
       mockModel(
-        { toolCall: { toolName: "echo", input: { text: "ping" } } },
+        {
+          text: "checking…",
+          toolCall: { toolName: "echo", input: { text: "ping" } }
+        },
+        { toolCall: { toolName: NO_REPLY_TOOL_NAME } },
         { text: "done" }
       )
     );
-    await run({ model }, "hello", SILENCE_AND_ECHO);
+    const streamed: string[] = [];
+    const outcome = await runTurn({
+      session: new FakeSession(),
+      text: "hello",
+      systemSuffix: CALLER_SUFFIX,
+      tools: NO_REPLY_AND_ECHO,
+      models: createModelPair({ model }),
+      unexpectedReply: UNEXPECTED_REPLY,
+      onContent: (text) => {
+        streamed.push(text);
+      }
+    });
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0].tools).toContain(SILENCE_TOOL_NAME);
+    // Having said "checking…", the agent owes a conclusion — a later no_reply is
+    // ignored and the turn ends with the real reply.
+    expect(outcome).toEqual({ kind: "reply", text: "done" });
+    expect(streamed).toEqual(["checking…"]);
+    // Offered on step 0 (nothing said yet), withdrawn from step 1 on (spoken).
+    expect(calls[0].tools).toContain(NO_REPLY_TOOL_NAME);
     expect(calls[0].prompt).toContain("Staying silent is the right default");
-
-    // Once the model has committed to real work, the escape hatch is withdrawn —
-    // tool and guidance both — but every other tool stays.
-    expect(calls[1].tools).not.toContain(SILENCE_TOOL_NAME);
+    expect(calls[1].tools).not.toContain(NO_REPLY_TOOL_NAME);
     expect(calls[1].tools).toContain("echo");
     expect(calls[1].prompt).not.toContain(
       "Staying silent is the right default"
     );
+  });
+});
+
+describe("runTurn — no_reply across the primary→fallback boundary", () => {
+  it("lets the fallback decline when the primary failed before speaking", async () => {
+    // Chatter + a primary capacity blip: nothing was streamed, so the fallback
+    // is still free to stay silent (Scenario A).
+    const outcome = await runTurn({
+      session: new FakeSession(),
+      text: "lol same",
+      systemSuffix: CALLER_SUFFIX,
+      tools: NO_REPLY_AND_ECHO,
+      models: modelPair(
+        () => {
+          throw new Error("capacity temporarily exceeded");
+        },
+        () => mockModel({ toolCall: { toolName: NO_REPLY_TOOL_NAME } })
+      ),
+      unexpectedReply: UNEXPECTED_REPLY
+    });
+    expect(outcome).toEqual({ kind: "no_reply" });
+  });
+
+  it("forbids the fallback from declining once the primary has streamed", async () => {
+    // Primary streams a working push, then fails mid-loop. The fallback inherits
+    // repliedAny === true: no_reply is neither offered nor honored, so a final
+    // reply always lands (Scenario B — never a stranded ⏳).
+    const primary = mockModel({
+      text: "checking…",
+      toolCall: { toolName: "echo", input: { text: "x" } }
+    });
+    const origGen = primary.doGenerate.bind(primary);
+    let calls = 0;
+    primary.doGenerate = async (o: Parameters<typeof origGen>[0]) => {
+      if (calls++ === 1) throw new Error("capacity temporarily exceeded");
+      return origGen(o);
+    };
+    const { model: fallback, calls: fallbackCalls } = recordCalls(
+      mockModel(
+        { toolCall: { toolName: NO_REPLY_TOOL_NAME } },
+        { text: "here is the answer" }
+      )
+    );
+    const streamed: string[] = [];
+    const outcome = await runTurn({
+      session: new FakeSession(),
+      text: "what's the staging URL?",
+      systemSuffix: CALLER_SUFFIX,
+      tools: NO_REPLY_AND_ECHO,
+      models: modelPair(
+        () => primary,
+        () => fallback
+      ),
+      unexpectedReply: UNEXPECTED_REPLY,
+      onContent: (text) => {
+        streamed.push(text);
+      }
+    });
+
+    expect(streamed).toEqual(["checking…"]); // the primary spoke before failing
+    expect(outcome).toEqual({ kind: "reply", text: "here is the answer" });
+    // The fallback was never even offered no_reply.
+    expect(fallbackCalls[0].tools).not.toContain(NO_REPLY_TOOL_NAME);
   });
 });

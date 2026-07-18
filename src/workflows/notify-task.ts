@@ -4,7 +4,7 @@ import type { GatewayIdentity } from "@/a2a/verify";
 import { parsePrivateJwk } from "@/a2a/card";
 import {
   buildCompletedTask,
-  buildSilentCompletedTask,
+  buildNoReplyCompletedTask,
   postNotification,
   signCallbackJwt
 } from "@/a2a/notify";
@@ -91,11 +91,11 @@ export async function runNotifyTask(
     })
   );
 
-  // A silent turn still completes and still calls back — the gateway's pending
+  // A no-reply turn still completes and still calls back — the gateway's pending
   // row must resolve either way. It just carries no message to post to Slack.
   const task =
     reply === null
-      ? buildSilentCompletedTask(p.taskId, p.contextId)
+      ? buildNoReplyCompletedTask(p.taskId, p.contextId)
       : buildCompletedTask(p.taskId, p.contextId, reply);
 
   // Persist the terminal task, unless the caller canceled it meanwhile.

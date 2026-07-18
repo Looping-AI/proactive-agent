@@ -132,7 +132,7 @@ describe("NotifyTaskWorkflow", () => {
     });
   });
 
-  it("POSTs a completed Task with no message when the agent stays silent", async () => {
+  it("POSTs a completed Task with no message when the agent declines to reply", async () => {
     const cap: StubCapture = { reply: null };
     mockAgent(cap);
 

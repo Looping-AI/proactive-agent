@@ -13,8 +13,8 @@ import {
   toModelMessages,
   userSessionMessage
 } from "./history";
-import { SILENCE_GUIDANCE } from "./prompt";
-import { SILENCE_TOOL_NAME } from "./tools";
+import { NO_REPLY_GUIDANCE } from "./prompt";
+import { NO_REPLY_TOOL_NAME } from "./tools";
 import type { SessionLike } from "./session";
 
 export const TRANSIENT_REPLY =
@@ -22,36 +22,41 @@ export const TRANSIENT_REPLY =
 
 /**
  * How a turn ended: with a reply to deliver, or with the agent deliberately
- * declining to answer (the model's first move was the `silence` tool). Distinct
- * from an empty reply, which means the model failed and yields
- * {@link TRANSIENT_REPLY}.
+ * declining to answer (it called the `no_reply` tool without having sent
+ * anything first). Distinct from an empty reply, which means the model failed and
+ * yields {@link TRANSIENT_REPLY}.
  */
-export type TurnOutcome = { kind: "reply"; text: string } | { kind: "silent" };
+export type TurnOutcome =
+  { kind: "reply"; text: string } | { kind: "no_reply" };
 
-/** The only part of a `StepResult` the silence predicates read. */
+/** The only part of a `StepResult` the no-reply predicates read. */
 type ToolCallingStep = { toolCalls: ReadonlyArray<{ toolName: string }> };
 
-/** A step whose one and only tool call is `silence`. Any text alongside it is irrelevant. */
-export function isSilenceOnlyStep(step: ToolCallingStep): boolean {
-  return (
-    step.toolCalls.length === 1 &&
-    step.toolCalls[0].toolName === SILENCE_TOOL_NAME
-  );
+/** Whether a step calls `no_reply` at all — on its own or beside other tools. */
+export function stepCallsNoReply(step: ToolCallingStep): boolean {
+  return step.toolCalls.some((c) => c.toolName === NO_REPLY_TOOL_NAME);
 }
 
 /**
- * Whether a run was a silent turn: **exactly one step**, whose only tool call was
- * `silence`. Everything else — `silence` alongside a real tool, or `silence` on a
- * later step — is ignored, and the turn produces a normal reply.
+ * Whether a run declined to reply: the agent has **not sent anything this turn**
+ * (`!repliedAny`) and its final step called `no_reply`. A `no_reply` call ends
+ * the turn the moment it appears — even beside another tool, which still runs but
+ * whose result is discarded — so the first step to call it is the last. A
+ * `no_reply` after the agent already streamed content is the one thing ignored.
  *
- * The `length === 1` guard is what enforces "first step only" at *runtime*.
- * `activeTools` (below) merely hides the tool from the model; the SDK still
- * resolves a tool call against the full, unfiltered map, so a model that names
- * `silence` on a later step executes it happily. Without this guard such a call
- * would silently discard a turn that had already done real work.
+ * `!repliedAny` is the runtime guard that lets `no_reply` be a *late* decision
+ * (browse, then conclude there's nothing to add) while still forbidding it once
+ * the agent has spoken. `activeTools` (below) merely hides the tool from the
+ * model; the SDK still resolves a tool call against the full, unfiltered map, so
+ * a model that names `no_reply` after speaking executes it happily — this flag is
+ * what stops that from discarding a turn Slack has already seen.
  */
-export function isSilentTurn(steps: readonly ToolCallingStep[]): boolean {
-  return steps.length === 1 && isSilenceOnlyStep(steps[0]);
+export function isNoReplyTurn(
+  repliedAny: boolean,
+  steps: readonly ToolCallingStep[]
+): boolean {
+  const last = steps.at(-1);
+  return !repliedAny && last !== undefined && stepCallsNoReply(last);
 }
 
 /** Whether an error is a transient Workers-AI capacity/timeout condition. */
@@ -109,12 +114,13 @@ function buildIntermediateContentHandler(
   return async (step) => {
     const i = stepIndex++;
     if (!isIntermediateStep(step)) return;
-    // A first-step `silence` call ends the turn with no reply, so text the model
-    // wrote alongside it must not leak out as a `working` push. This is the only
-    // place it can be caught: the SDK fires `onStepFinish` *before* it evaluates
-    // `stopWhen`. Gated to step 0 because a `silence` call on any later step is
-    // ignored (see `isSilentTurn`), making its text genuine intermediate content.
-    if (i === 0 && isSilenceOnlyStep(step)) return;
+    // A step that calls `no_reply` ends the turn with no reply, so text the model
+    // wrote alongside it must not leak out as a `working` push (which would also
+    // mark us as having spoken, via the caller's `repliedAny` tracker). This is
+    // the only place it can be caught: the SDK fires `onStepFinish` *before* it
+    // evaluates `stopWhen`. When the call is instead ignored (we've already
+    // spoken), dropping that one intermediate message is harmless.
+    if (stepCallsNoReply(step)) return;
     const content = step.text.trim();
     if (content) await onContent(content, i);
   };
@@ -127,10 +133,11 @@ function buildIntermediateContentHandler(
  * return the final reply text. The inbound text keeps its `<turn>` provenance
  * wrapper verbatim for the model (and Phase-3 recall) to read.
  *
- * May instead resolve to `{ kind: "silent" }`: the agent sees every channel
- * message, so its first move can be the `silence` tool, ending the turn with no
- * reply. The user message is still appended either way — the agent reads the
- * channel whether or not it answers.
+ * May instead resolve to `{ kind: "no_reply" }`: the agent sees every channel
+ * message and can call the `no_reply` tool to decline — either straight away or
+ * after looking into something — as long as it has not streamed any content yet.
+ * The user message is still appended either way, so the agent reads the channel
+ * whether or not it answers.
  *
  * **Never throws**: a transient (capacity/timeout) failure resolves to a
  * friendly "try again" message, an unexpected failure to `unexpectedReply`, so
@@ -152,28 +159,43 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
     const history = await session.getHistory();
     const system = (await session.refreshSystemPrompt()) + systemSuffix;
     const tools = { ...(await session.tools()), ...extraTools };
-    const withoutSilence = Object.keys(tools).filter(
-      (name) => name !== SILENCE_TOOL_NAME
+    const withoutNoReply = Object.keys(tools).filter(
+      (name) => name !== NO_REPLY_TOOL_NAME
     );
 
-    // Stop as soon as the model declines to answer — otherwise the SDK would
-    // feed the (meaningless) `silence` result back and spend another step. The
-    // two conditions are OR'd and disjoint: `stepCountIs` fires at MAX_STEPS,
-    // `isSilentTurn` only ever at one step. Not `hasToolCall("silence")`, which
-    // would also stop on a `silence` call we mean to ignore.
+    // Whether the agent has streamed any user-facing content this turn. Flipped
+    // by the tracked `onContent` below and read live by `prepareStep`/`stopWhen`.
+    // It is the single signal behind `no_reply`: available until we speak, then
+    // withdrawn. Turn-level (not per attempt), so a primary→fallback re-run after
+    // the primary streamed inherits it and the fallback cannot go silent.
+    let repliedAny = false;
+    const tracked: RunTurnArgs["onContent"] = onContent
+      ? async (content, i) => {
+          repliedAny = true;
+          await onContent(content, i);
+        }
+      : undefined;
+
+    // Stop as soon as the agent declines — otherwise the SDK would feed the
+    // (meaningless) `no_reply` result back and spend another step. The two
+    // conditions are OR'd: `stepCountIs` caps the loop, `isNoReplyTurn` ends it on
+    // a `no_reply` call we haven't disqualified. Not `hasToolCall("no_reply")`,
+    // which would also stop on a `no_reply` call we mean to ignore (after the
+    // agent has already spoken).
     const stopWhen: Array<StopCondition<ToolSet>> = [
       stepCountIs(MAX_STEPS),
-      ({ steps }) => isSilentTurn(steps)
+      ({ steps }) => isNoReplyTurn(repliedAny, steps)
     ];
 
-    // `silence` is a first-move-only escape hatch: once the model has committed
-    // to real work it must finish the turn with a reply. So step 0 sees the full
-    // toolset and the guidance explaining it; later steps see neither. (Omitting
-    // a field here falls back to the outer `generateArgs` value.)
-    const prepareStep: PrepareStepFunction<ToolSet> = ({ stepNumber }) =>
-      stepNumber === 0
-        ? { system: system + SILENCE_GUIDANCE }
-        : { activeTools: withoutSilence };
+    // Offer `no_reply` (and the guidance explaining it) on every step until the
+    // agent has spoken; withdraw both once it has. This lets the agent decline
+    // late (look something up, then conclude there's nothing to add) while never
+    // going silent after streaming content. (Omitting a field here falls back to
+    // the outer `generateArgs` value.)
+    const prepareStep: PrepareStepFunction<ToolSet> = () =>
+      repliedAny
+        ? { activeTools: withoutNoReply }
+        : { system: system + NO_REPLY_GUIDANCE };
 
     const generateArgs = {
       system,
@@ -197,16 +219,16 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
       result = await generateText({
         model: models.primary(),
         ...generateArgs,
-        onStepFinish: onContent
-          ? buildIntermediateContentHandler(onContent)
+        onStepFinish: tracked
+          ? buildIntermediateContentHandler(tracked)
           : undefined
       });
     } catch (primaryErr) {
-      // The fallback re-runs the whole turn, so `prepareStep`'s stepNumber
-      // restarts at 0 and the fallback model gets its own shot at `silence` —
-      // which is what we want. Rare consequence: if the primary streamed a
-      // `working` push and *then* threw, and the fallback opens with `silence`,
-      // the gateway keeps that intermediate message and never gets a final one.
+      // The fallback re-runs the whole turn, but `repliedAny` is turn-level and
+      // survives the re-run: if the primary already streamed a `working` push,
+      // the fallback inherits `repliedAny === true` and cannot go silent, so it
+      // must deliver a final reply. If nothing had streamed yet, the fallback is
+      // free to decline just as the primary was.
       console.warn(
         "[agent-loop] AI error on primary model, retrying with fallback",
         { model: modelId, error: String(primaryErr) }
@@ -215,21 +237,23 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
       result = await generateText({
         model: models.fallback(),
         ...generateArgs,
-        onStepFinish: onContent
-          ? buildIntermediateContentHandler(onContent)
+        onStepFinish: tracked
+          ? buildIntermediateContentHandler(tracked)
           : undefined
       });
     }
 
-    // Before the empty-text check below, which a silent turn would otherwise
+    // Before the empty-text check below, which a no-reply turn would otherwise
     // trip: its step is `finishReason:"tool-calls"` with (usually) no text, and
     // would be reported to the caller as a model failure. Reading the outcome
     // off `result.steps` rather than trusting `stopWhen` also covers the case of
-    // an invalid `silence` call, which exits the loop without consulting it.
+    // an invalid `no_reply` call, which exits the loop without consulting it.
     // Any text the model wrote alongside the call is discarded here, unread.
-    if (isSilentTurn(result.steps)) {
-      console.debug("[agent-loop] silent turn — no reply", { model: modelId });
-      return { kind: "silent" };
+    if (isNoReplyTurn(repliedAny, result.steps)) {
+      console.debug("[agent-loop] no_reply — declining to answer", {
+        model: modelId
+      });
+      return { kind: "no_reply" };
     }
 
     const replyText = result.text.trim();
