@@ -228,7 +228,7 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
     // an invalid `silence` call, which exits the loop without consulting it.
     // Any text the model wrote alongside the call is discarded here, unread.
     if (isSilentTurn(result.steps)) {
-      console.log("[agent-loop] silent turn — no reply", { model: modelId });
+      console.debug("[agent-loop] silent turn — no reply", { model: modelId });
       return { kind: "silent" };
     }
 
