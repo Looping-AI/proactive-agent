@@ -123,9 +123,19 @@ export class ProactiveAgent extends Agent<Env> {
   }
 
   /**
-   * Answer one turn for this caller and return the reply text. Runs the
-   * Workers-AI tool loop over the continuous Session (append → generate →
-   * persist).
+   * Answer one turn for this caller and return the reply text, or **`null` when
+   * the agent deliberately chose not to reply** — it called the `no_reply` tool
+   * (see {@link file://../agent/loop.ts}). The workflow turns that into a
+   * `completed` Task carrying no message. Runs the Workers-AI tool loop over the
+   * continuous Session (append → generate → persist).
+   *
+   * The loop's richer {@link TurnOutcome} union is collapsed to `string | null`
+   * here on purpose, and should stay collapsed: DO RPC intersects every *object*
+   * return with `Disposable`, whose symbol key then fails the
+   * `Rpc.Serializable` constraint on the workflow's `step.do(...)`. `string` and
+   * `null` are plain scalars, so they cross both the DO and the Workflow-step
+   * boundaries untouched — the same reason {@link getTask} returns
+   * `PlainTask | null`.
    *
    * The turn loop {@link runTurn} never throws — transient/unexpected failures
    * resolve to a friendly reply — so this method rejects only on a genuine
@@ -141,13 +151,13 @@ export class ProactiveAgent extends Agent<Env> {
     text: string,
     identity: GatewayIdentity,
     push?: TurnPushContext
-  ): Promise<string> {
+  ): Promise<string | null> {
     const session = this.getSession(identity);
     // Gate the `recall` tool on "has compacted at least once" — nothing is
     // archived (and the tool would only return empties) before the first
     // compaction.
     const hasArchive = (await session.getCompactions()).length > 0;
-    return await runTurn({
+    const outcome = await runTurn({
       session,
       text,
       systemSuffix: callerContext(identity),
@@ -164,6 +174,7 @@ export class ProactiveAgent extends Agent<Env> {
       unexpectedReply: UNEXPECTED_REPLY,
       onContent: push ? this.streamWorking(push) : undefined
     });
+    return outcome.kind === "no_reply" ? null : outcome.text;
   }
 
   /**

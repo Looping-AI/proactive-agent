@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildTools, recall } from "@/agent/tools";
+import type { z } from "zod";
+import {
+  buildTools,
+  recall,
+  NO_REPLY_IGNORED,
+  noReplyTool
+} from "@/agent/tools";
 import type { RecallDeps } from "@/agent/tools";
 import type { RecallIndex } from "@/agent/recall";
 import type { QuickActionBinding } from "agents/browser";
@@ -58,20 +64,40 @@ describe("recall", () => {
   });
 });
 
+describe("noReplyTool", () => {
+  it("accepts a call with no reason", () => {
+    // A required field the model omits would make the SDK mark the call invalid
+    // and skip execution, which halts the loop early. `reason` must stay optional.
+    const schema = noReplyTool.inputSchema as z.ZodType;
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ reason: "channel chatter" }).success).toBe(true);
+  });
+
+  it("executes as an ordinary no-op tool", async () => {
+    // `execute` must exist at all: without it, a `no_reply` call made beside a
+    // real tool would halt the loop instead of degrading to a normal reply.
+    const out = await noReplyTool.execute?.(
+      {},
+      { toolCallId: "call-1", messages: [] }
+    );
+    expect(out).toBe(NO_REPLY_IGNORED);
+  });
+});
+
 describe("buildTools", () => {
-  it("exposes no tools by default (Session contributes set_context in the loop)", () => {
+  it("exposes only no_reply by default (Session contributes set_context in the loop)", () => {
     const tools = buildTools();
-    expect(Object.keys(tools)).toEqual([]);
+    expect(Object.keys(tools)).toEqual(["no_reply"]);
   });
 
   it("omits recall until this caller has compacted at least once", () => {
     const tools = buildTools(recallDeps(false));
-    expect(Object.keys(tools)).toEqual([]);
+    expect(Object.keys(tools)).toEqual(["no_reply"]);
   });
 
   it("adds the recall tool once an archive exists", () => {
     const tools = buildTools(recallDeps(true));
-    expect(Object.keys(tools).sort()).toEqual(["recall"]);
+    expect(Object.keys(tools).sort()).toEqual(["no_reply", "recall"]);
   });
 
   it("adds the browser tools when a Browser Rendering binding is present", () => {
@@ -80,7 +106,8 @@ describe("buildTools", () => {
       "browser_extract",
       "browser_links",
       "browser_markdown",
-      "browser_scrape"
+      "browser_scrape",
+      "no_reply"
     ]);
   });
 
@@ -91,6 +118,7 @@ describe("buildTools", () => {
       "browser_links",
       "browser_markdown",
       "browser_scrape",
+      "no_reply",
       "recall"
     ]);
   });

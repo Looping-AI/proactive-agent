@@ -1,4 +1,10 @@
-import type { FinishReason, StepResult, ToolSet } from "ai";
+import type {
+  FinishReason,
+  PrepareStepFunction,
+  StepResult,
+  StopCondition,
+  ToolSet
+} from "ai";
 import { generateText, stepCountIs } from "ai";
 import type { ModelPair } from "./model";
 import { MAX_STEPS } from "@/config";
@@ -7,10 +13,51 @@ import {
   toModelMessages,
   userSessionMessage
 } from "./history";
+import { NO_REPLY_GUIDANCE } from "./prompt";
+import { NO_REPLY_TOOL_NAME } from "./tools";
 import type { SessionLike } from "./session";
 
 export const TRANSIENT_REPLY =
   "The AI service is temporarily unavailable. Please try again in a moment.";
+
+/**
+ * How a turn ended: with a reply to deliver, or with the agent deliberately
+ * declining to answer (it called the `no_reply` tool without having sent
+ * anything first). Distinct from an empty reply, which means the model failed and
+ * yields {@link TRANSIENT_REPLY}.
+ */
+export type TurnOutcome =
+  { kind: "reply"; text: string } | { kind: "no_reply" };
+
+/** The only part of a `StepResult` the no-reply predicates read. */
+type ToolCallingStep = { toolCalls: ReadonlyArray<{ toolName: string }> };
+
+/** Whether a step calls `no_reply` at all — on its own or beside other tools. */
+export function stepCallsNoReply(step: ToolCallingStep): boolean {
+  return step.toolCalls.some((c) => c.toolName === NO_REPLY_TOOL_NAME);
+}
+
+/**
+ * Whether a run declined to reply: the agent has **not sent anything this turn**
+ * (`!repliedAny`) and its final step called `no_reply`. A `no_reply` call ends
+ * the turn the moment it appears — even beside another tool, which still runs but
+ * whose result is discarded — so the first step to call it is the last. A
+ * `no_reply` after the agent already streamed content is the one thing ignored.
+ *
+ * `!repliedAny` is the runtime guard that lets `no_reply` be a *late* decision
+ * (browse, then conclude there's nothing to add) while still forbidding it once
+ * the agent has spoken. `activeTools` (below) merely hides the tool from the
+ * model; the SDK still resolves a tool call against the full, unfiltered map, so
+ * a model that names `no_reply` after speaking executes it happily — this flag is
+ * what stops that from discarding a turn Slack has already seen.
+ */
+export function isNoReplyTurn(
+  repliedAny: boolean,
+  steps: readonly ToolCallingStep[]
+): boolean {
+  const last = steps.at(-1);
+  return !repliedAny && last !== undefined && stepCallsNoReply(last);
+}
 
 /** Whether an error is a transient Workers-AI capacity/timeout condition. */
 export function isTransientAiError(err: unknown): boolean {
@@ -67,6 +114,13 @@ function buildIntermediateContentHandler(
   return async (step) => {
     const i = stepIndex++;
     if (!isIntermediateStep(step)) return;
+    // A step that calls `no_reply` ends the turn with no reply, so text the model
+    // wrote alongside it must not leak out as a `working` push (which would also
+    // mark us as having spoken, via the caller's `repliedAny` tracker). This is
+    // the only place it can be caught: the SDK fires `onStepFinish` *before* it
+    // evaluates `stopWhen`. When the call is instead ignored (we've already
+    // spoken), dropping that one intermediate message is harmless.
+    if (stepCallsNoReply(step)) return;
     const content = step.text.trim();
     if (content) await onContent(content, i);
   };
@@ -79,11 +133,17 @@ function buildIntermediateContentHandler(
  * return the final reply text. The inbound text keeps its `<turn>` provenance
  * wrapper verbatim for the model (and Phase-3 recall) to read.
  *
+ * May instead resolve to `{ kind: "no_reply" }`: the agent sees every channel
+ * message and can call the `no_reply` tool to decline — either straight away or
+ * after looking into something — as long as it has not streamed any content yet.
+ * The user message is still appended either way, so the agent reads the channel
+ * whether or not it answers.
+ *
  * **Never throws**: a transient (capacity/timeout) failure resolves to a
  * friendly "try again" message, an unexpected failure to `unexpectedReply`, so
- * the DO's `converse()` caller always gets a string to publish.
+ * the DO's `converse()` caller always gets an outcome to publish.
  */
-export async function runTurn(args: RunTurnArgs): Promise<string> {
+export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
   const {
     session,
     text,
@@ -99,12 +159,50 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
     const history = await session.getHistory();
     const system = (await session.refreshSystemPrompt()) + systemSuffix;
     const tools = { ...(await session.tools()), ...extraTools };
+    const withoutNoReply = Object.keys(tools).filter(
+      (name) => name !== NO_REPLY_TOOL_NAME
+    );
+
+    // Whether the agent has streamed any user-facing content this turn. Flipped
+    // by the tracked `onContent` below and read live by `prepareStep`/`stopWhen`.
+    // It is the single signal behind `no_reply`: available until we speak, then
+    // withdrawn. Turn-level (not per attempt), so a primary→fallback re-run after
+    // the primary streamed inherits it and the fallback cannot go silent.
+    let repliedAny = false;
+    const tracked: RunTurnArgs["onContent"] = onContent
+      ? async (content, i) => {
+          repliedAny = true;
+          await onContent(content, i);
+        }
+      : undefined;
+
+    // Stop as soon as the agent declines — otherwise the SDK would feed the
+    // (meaningless) `no_reply` result back and spend another step. The two
+    // conditions are OR'd: `stepCountIs` caps the loop, `isNoReplyTurn` ends it on
+    // a `no_reply` call we haven't disqualified. Not `hasToolCall("no_reply")`,
+    // which would also stop on a `no_reply` call we mean to ignore (after the
+    // agent has already spoken).
+    const stopWhen: Array<StopCondition<ToolSet>> = [
+      stepCountIs(MAX_STEPS),
+      ({ steps }) => isNoReplyTurn(repliedAny, steps)
+    ];
+
+    // Offer `no_reply` (and the guidance explaining it) on every step until the
+    // agent has spoken; withdraw both once it has. This lets the agent decline
+    // late (look something up, then conclude there's nothing to add) while never
+    // going silent after streaming content. (Omitting a field here falls back to
+    // the outer `generateArgs` value.)
+    const prepareStep: PrepareStepFunction<ToolSet> = () =>
+      repliedAny
+        ? { activeTools: withoutNoReply }
+        : { system: system + NO_REPLY_GUIDANCE };
 
     const generateArgs = {
       system,
       messages: toModelMessages(history),
       tools,
-      stopWhen: stepCountIs(MAX_STEPS),
+      stopWhen,
+      prepareStep,
       // We do our own primary → fallback recovery below, so disable the SDK's
       // per-model exponential-backoff retries — they'd only add latency on a
       // hard failure and duplicate our fallback.
@@ -121,11 +219,16 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
       result = await generateText({
         model: models.primary(),
         ...generateArgs,
-        onStepFinish: onContent
-          ? buildIntermediateContentHandler(onContent)
+        onStepFinish: tracked
+          ? buildIntermediateContentHandler(tracked)
           : undefined
       });
     } catch (primaryErr) {
+      // The fallback re-runs the whole turn, but `repliedAny` is turn-level and
+      // survives the re-run: if the primary already streamed a `working` push,
+      // the fallback inherits `repliedAny === true` and cannot go silent, so it
+      // must deliver a final reply. If nothing had streamed yet, the fallback is
+      // free to decline just as the primary was.
       console.warn(
         "[agent-loop] AI error on primary model, retrying with fallback",
         { model: modelId, error: String(primaryErr) }
@@ -134,10 +237,23 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
       result = await generateText({
         model: models.fallback(),
         ...generateArgs,
-        onStepFinish: onContent
-          ? buildIntermediateContentHandler(onContent)
+        onStepFinish: tracked
+          ? buildIntermediateContentHandler(tracked)
           : undefined
       });
+    }
+
+    // Before the empty-text check below, which a no-reply turn would otherwise
+    // trip: its step is `finishReason:"tool-calls"` with (usually) no text, and
+    // would be reported to the caller as a model failure. Reading the outcome
+    // off `result.steps` rather than trusting `stopWhen` also covers the case of
+    // an invalid `no_reply` call, which exits the loop without consulting it.
+    // Any text the model wrote alongside the call is discarded here, unread.
+    if (isNoReplyTurn(repliedAny, result.steps)) {
+      console.debug("[agent-loop] no_reply — declining to answer", {
+        model: modelId
+      });
+      return { kind: "no_reply" };
     }
 
     const replyText = result.text.trim();
@@ -155,17 +271,20 @@ export async function runTurn(args: RunTurnArgs): Promise<string> {
           finishReason
         });
       }
-      return TRANSIENT_REPLY;
+      return { kind: "reply", text: TRANSIENT_REPLY };
     }
 
     await session.appendMessage(assistantSessionMessage(replyText));
-    return replyText;
+    return { kind: "reply", text: replyText };
   } catch (err) {
     console.error("[agent-loop] turn failed", {
       model: modelId,
       err: String(err),
       stack: err instanceof Error ? err.stack : undefined
     });
-    return isTransientAiError(err) ? TRANSIENT_REPLY : args.unexpectedReply;
+    return {
+      kind: "reply",
+      text: isTransientAiError(err) ? TRANSIENT_REPLY : args.unexpectedReply
+    };
   }
 }

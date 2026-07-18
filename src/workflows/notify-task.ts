@@ -4,6 +4,7 @@ import type { GatewayIdentity } from "@/a2a/verify";
 import { parsePrivateJwk } from "@/a2a/card";
 import {
   buildCompletedTask,
+  buildNoReplyCompletedTask,
   postNotification,
   signCallbackJwt
 } from "@/a2a/notify";
@@ -78,7 +79,8 @@ export async function runNotifyTask(
   // Generate the reply. Durable + retried; `converse` resolves its own transient
   // failures to a friendly string, so a throw here is a genuine RPC fault. The
   // push context lets the DO stream intermediate `working` callbacks live during
-  // generation; this step still returns only the terminal reply text.
+  // generation; this step still returns only the terminal reply text — or `null`
+  // when the agent chose not to reply at all.
   const reply = await step.do("generate", () =>
     stub.converse(p.text, p.identity, {
       taskId: p.taskId,
@@ -89,7 +91,12 @@ export async function runNotifyTask(
     })
   );
 
-  const task = buildCompletedTask(p.taskId, p.contextId, reply);
+  // A no-reply turn still completes and still calls back — the gateway's pending
+  // row must resolve either way. It just carries no message to post to Slack.
+  const task =
+    reply === null
+      ? buildNoReplyCompletedTask(p.taskId, p.contextId)
+      : buildCompletedTask(p.taskId, p.contextId, reply);
 
   // Persist the terminal task, unless the caller canceled it meanwhile.
   const canceled = await step.do("complete", async () => {

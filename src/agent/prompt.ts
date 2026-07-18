@@ -20,6 +20,23 @@ export const SOUL: string[] = [
 const BROWSER_CAPABILITY =
   "You can read live web pages with the `browser_*` tools — use `browser_markdown` to read a page and `browser_extract` to pull out specific fields.";
 
+/**
+ * How to use the `no_reply` tool. Appended to the system prompt by the loop on
+ * every step **until the agent has sent anything this turn** (see
+ * {@link file://./loop.ts}) — deliberately not part of {@link SOUL}, which is the
+ * frozen block re-injected every turn and fed to compaction. Once the agent has
+ * streamed any content the tool is withdrawn from its view, so a permanent
+ * mention here would only tempt a call that does nothing and burns a step.
+ */
+export const NO_REPLY_GUIDANCE = [
+  "",
+  "",
+  "You see every message in this channel, including the many that are not for you.",
+  "Call the `no_reply` tool to end your turn without replying whenever the message needs no answer from you: people talking to each other, chatter, acknowledgements, or anything you were not asked about. You may also look something up first and then call `no_reply` if, having looked, there is genuinely nothing worth adding.",
+  "Staying silent is the right default in a busy channel. Reply only when you are addressed, asked a question, or can add something the conversation clearly needs.",
+  "Calling `no_reply` ends your turn at once — don't pair it with a tool whose result you still need, and don't write any text with it (that text is discarded). It is unavailable once you have already sent something this turn."
+].join("\n");
+
 /** The frozen soul as a single system-prompt string. */
 export function soulPrompt(): string {
   const lines = [...SOUL];

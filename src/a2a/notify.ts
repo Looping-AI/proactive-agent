@@ -35,6 +35,20 @@ export const NOTIFICATION_TOKEN_HEADER = "x-a2a-notification-token";
  */
 const CALLBACK_TOKEN_TTL = "5m";
 
+/** A Task snapshot in `state` carrying no message — nothing to say, only a state change. */
+function buildBareTask(
+  taskId: string,
+  contextId: string,
+  state: "submitted" | "completed"
+): PlainTask {
+  return {
+    kind: "task",
+    id: taskId,
+    contextId,
+    status: { state, timestamp: new Date().toISOString() }
+  };
+}
+
 /**
  * The `submitted` Task we return synchronously to accept a turn (A2A §7.2). The
  * gateway only requires `kind:"task"` + a non-empty `id`; the actual reply
@@ -44,12 +58,25 @@ export function buildSubmittedTask(
   taskId: string,
   contextId: string
 ): PlainTask {
-  return {
-    kind: "task",
-    id: taskId,
-    contextId,
-    status: { state: "submitted", timestamp: new Date().toISOString() }
-  };
+  return buildBareTask(taskId, contextId, "submitted");
+}
+
+/**
+ * The terminal `completed` Task for a turn the agent deliberately did not answer
+ * (it called the `no_reply` tool — see {@link file://../agent/loop.ts}). Same
+ * shape as {@link buildSubmittedTask}: **no `status.message` at all**.
+ *
+ * The callback is still POSTed. The gateway's pending row has to resolve — we
+ * simply hand it nothing to post to Slack. There is no `messageId` because there
+ * is no message, so unlike {@link buildCompletedTask} nothing needs a stable id
+ * for the gateway to dedupe on: a `notify`-step retry re-delivers no content and
+ * is idempotent by construction.
+ */
+export function buildNoReplyCompletedTask(
+  taskId: string,
+  contextId: string
+): PlainTask {
+  return buildBareTask(taskId, contextId, "completed");
 }
 
 /**
