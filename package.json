@@ -18,7 +18,7 @@
   "dependencies": {
     "@a2a-js/sdk": "^0.3.14",
     "agents": "^0.17.3",
-    "ai": "^6.0.222",
+    "ai": "^7.0.31",
     "drizzle-orm": "^0.45.2",
     "jose": "^6.2.3",
     "workers-ai-provider": "^3.3.1",
